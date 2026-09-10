@@ -39,18 +39,21 @@ A different port can be selected with:
 python -m outlook_mcp.server --port 8765
 ```
 
-## Draft-only mode
+## Draft-only mail mode
 
 The server intentionally does not call Outlook `Send()`. Corporate Outlook policies may block programmatic sending, while draft creation remains allowed.
 
-Available workflow tools:
+Available mail tools:
 
 - `get_outlook_status`
 - `diagnose_outlook`
 - `create_draft`
 - `create_bulk_drafts`
+- `create_drafts_batch`
 
-`create_bulk_drafts` creates one separate Outlook draft per recipient.
+`create_bulk_drafts` creates one separate Outlook draft per recipient with common content.
+
+`create_drafts_batch` accepts many fully prepared messages in one call, allowing each draft to have its own recipients, subject, body, tables and attachments.
 
 ## Create one draft
 
@@ -70,7 +73,6 @@ Excel example:
 
 ```json
 {
-  "to": [],
   "recipient_file": "C:\\Work\\mail\\users.xlsx",
   "recipient_file_sheet": "Получатели",
   "recipient_file_column": "Почта",
@@ -133,19 +135,9 @@ A client that can read an uploaded file and pass its contents to the MCP tool ca
 }
 ```
 
-The server:
-
-1. validates the Base64 data;
-2. writes it to a temporary directory;
-3. adds it to the Outlook draft;
-4. saves the draft;
-5. deletes the temporary copy.
-
-Uploaded files are limited to 20 MB per attachment by the MCP server. Base64 data URLs are also accepted.
+The server validates the Base64 data, writes it to a temporary directory, attaches it to the Outlook draft, saves the draft and removes the temporary copy. Uploaded files are limited to 20 MB per attachment. Base64 data URLs are also accepted.
 
 Both `attachments` and `uploaded_attachments` may be used in the same request.
-
-For `create_bulk_drafts`, an uploaded attachment is materialized once and attached to every generated draft.
 
 ## Tables in the message body
 
@@ -167,3 +159,68 @@ Structured tables may be supplied using the `tables` parameter. The server rende
   ]
 }
 ```
+
+## Outlook calendar tools
+
+The server also exposes Outlook calendar operations:
+
+- `list_calendar_events`
+- `create_calendar_event`
+- `update_calendar_event`
+- `delete_calendar_event`
+
+Calendar date/time arguments use local ISO format, for example:
+
+```text
+2026-09-10T15:30:00
+```
+
+### List events
+
+```json
+{
+  "start": "2026-09-10T00:00:00",
+  "end": "2026-09-11T00:00:00"
+}
+```
+
+### Create an event
+
+```json
+{
+  "subject": "Project sync",
+  "start": "2026-09-10T15:30:00",
+  "end": "2026-09-10T16:00:00",
+  "location": "Teams",
+  "body": "Discuss project status",
+  "attendees": ["user1@company.ru", "user2@company.ru"],
+  "reminder_minutes": 15
+}
+```
+
+The event is saved in the local Outlook calendar. If attendees are provided, the item is prepared as a meeting, but the MCP server deliberately does **not** call `Send()`, so invitations are not sent automatically.
+
+### Update an event
+
+Use the `entry_id` returned by `list_calendar_events` or `create_calendar_event`:
+
+```json
+{
+  "entry_id": "OUTLOOK_ENTRY_ID",
+  "location": "Room 301",
+  "start": "2026-09-10T16:00:00",
+  "end": "2026-09-10T16:30:00"
+}
+```
+
+The item is saved without automatically sending meeting updates.
+
+### Delete an event
+
+```json
+{
+  "entry_id": "OUTLOOK_ENTRY_ID"
+}
+```
+
+The item is deleted from the local calendar. The server does not automatically send a meeting cancellation.
