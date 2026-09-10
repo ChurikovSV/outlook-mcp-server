@@ -24,184 +24,146 @@ pip install -e .
 ## Run over HTTP (default)
 
 ```powershell
-outlook-mcp
+python -m outlook_mcp.server
 ```
 
-By default the server starts with Streamable HTTP on localhost:
+Default MCP endpoint:
 
 ```text
 http://127.0.0.1:8000/mcp
 ```
 
-Equivalent explicit command:
+A different port can be selected with:
 
 ```powershell
-outlook-mcp --transport streamable-http --host 127.0.0.1 --port 8000
+python -m outlook_mcp.server --port 8765
 ```
 
-Use a different port if needed:
+## Draft-only mode
 
-```powershell
-outlook-mcp --port 8765
-```
+The server intentionally does not call Outlook `Send()`. Corporate Outlook policies may block programmatic sending, while draft creation remains allowed.
 
-Then the MCP endpoint is:
+Available workflow tools:
 
-```text
-http://127.0.0.1:8765/mcp
-```
+- `get_outlook_status`
+- `diagnose_outlook`
+- `create_draft`
+- `create_bulk_drafts`
 
-For security, `127.0.0.1` is the default bind address. Do not expose the server on `0.0.0.0` unless access is intentionally protected and allowed by corporate policy.
+`create_bulk_drafts` creates one separate Outlook draft per recipient.
 
-## Other transports
-
-stdio is still available:
-
-```powershell
-outlook-mcp --transport stdio
-```
-
-SSE is available only for compatibility with older MCP clients:
-
-```powershell
-outlook-mcp --transport sse --host 127.0.0.1 --port 8000
-```
-
-For new HTTP integrations, use Streamable HTTP rather than SSE.
-
-## MCP tools
-
-### `get_outlook_status`
-
-Checks that Outlook COM is available and returns configured Outlook accounts.
-
-### `create_draft`
-
-Creates one draft. Recipients can be passed directly and/or loaded from a local `.txt`, `.csv` or `.xlsx` file.
-
-### `send_email`
-
-Sends one email. All `to` recipients are placed into the same message and can see each other.
-
-### `send_bulk_email`
-
-Sends a separate email to every recipient. Use this for distribution lists when recipients must not see the other addresses.
-
-## Send to a recipient list
+## Create one draft
 
 ```json
 {
-  "to": [
+  "to": ["user@company.ru"],
+  "subject": "Meeting protocol",
+  "body": "Colleagues, sending the meeting protocol."
+}
+```
+
+## Recipients from TXT / CSV / XLSX
+
+Recipients can be supplied directly and/or loaded from a local file.
+
+Excel example:
+
+```json
+{
+  "to": [],
+  "recipient_file": "C:\\Work\\mail\\users.xlsx",
+  "recipient_file_sheet": "Получатели",
+  "recipient_file_column": "Почта",
+  "subject": "Meeting protocol",
+  "body": "Colleagues, sending the meeting protocol."
+}
+```
+
+Supported recipient files:
+
+- `.txt`
+- `.csv`
+- `.xlsx`
+
+## Create separate drafts for a distribution list
+
+```json
+{
+  "recipients": [
     "user1@company.ru",
-    "user2@company.ru",
-    "user3@company.ru"
+    "user2@company.ru"
   ],
-  "subject": "Meeting protocol",
-  "body": "Colleagues, sending the meeting protocol.",
-  "tables": [],
-  "attachments": []
-}
-```
-
-This request can be used with `create_draft` or `send_email`.
-
-## Send to recipients from TXT
-
-Example `C:\\Work\\mail\\recipients.txt`:
-
-```text
-user1@company.ru
-user2@company.ru
-user3@company.ru
-```
-
-Request:
-
-```json
-{
-  "to": [],
-  "recipient_file": "C:\\Work\\mail\\recipients.txt",
-  "subject": "Meeting protocol",
-  "body": "Colleagues, sending the meeting protocol.",
-  "tables": [],
-  "attachments": []
-}
-```
-
-## Send to recipients from CSV
-
-```json
-{
-  "to": [],
-  "recipient_file": "C:\\Work\\mail\\recipients.csv",
-  "recipient_file_column": "email",
-  "subject": "Meeting protocol",
-  "body": "Colleagues, sending the meeting protocol."
-}
-```
-
-CSV delimiters `,`, `;` and tab are detected automatically. The header is required.
-
-## Send to recipients from Excel
-
-Example workbook:
-
-```text
-Sheet: Получатели
-
-ФИО             Почта                 Подразделение
-Иванов Иван     ivanov@company.ru     Support
-Петров Петр     petrov@company.ru     DevOps
-```
-
-Request:
-
-```json
-{
-  "to": [],
-  "recipient_file": "C:\\Work\\mail\\users.xlsx",
-  "recipient_file_sheet": "Получатели",
-  "recipient_file_column": "Почта",
-  "subject": "Meeting protocol",
-  "body": "Colleagues, sending the meeting protocol."
-}
-```
-
-If `recipient_file_sheet` is omitted, the first worksheet is used.
-
-## Individual bulk sending
-
-Use `send_bulk_email` when each recipient should receive a separate message:
-
-```json
-{
-  "recipients": [],
-  "recipient_file": "C:\\Work\\mail\\users.xlsx",
-  "recipient_file_sheet": "Получатели",
-  "recipient_file_column": "Почта",
   "subject": "Notification",
-  "body": "Message text",
-  "tables": [],
-  "attachments": []
+  "body": "Message text"
 }
 ```
 
-## Email with attachments
+Or use `recipient_file` with `create_bulk_drafts`.
 
-Attachments are local Windows file paths accessible to the Windows user running Outlook and the MCP server.
+## Local file attachments
+
+Files already available on the Windows machine can be attached by path:
 
 ```json
 {
-  "to": ["team@company.ru"],
-  "subject": "Meeting protocol",
-  "body": "The full protocol is attached.",
+  "to": ["user@company.ru"],
+  "subject": "Report",
+  "body": "Report is attached.",
   "attachments": [
-    "C:\\Users\\sergey\\Documents\\protocol.docx",
-    "C:\\Users\\sergey\\Documents\\metrics.xlsx"
+    "C:\\Work\\reports\\report.xlsx"
   ]
 }
 ```
 
-## Recommended agent policy
+## Files uploaded through the MCP client
 
-For meeting-protocol workflows, prefer `create_draft` by default. Use `send_email` or `send_bulk_email` only when the user explicitly asks to send the message.
+A client that can read an uploaded file and pass its contents to the MCP tool can use `uploaded_attachments`.
+
+```json
+{
+  "to": ["user@company.ru"],
+  "subject": "Report",
+  "body": "Report is attached.",
+  "uploaded_attachments": [
+    {
+      "filename": "report.xlsx",
+      "content_base64": "UEsDBBQAAAAI..."
+    }
+  ]
+}
+```
+
+The server:
+
+1. validates the Base64 data;
+2. writes it to a temporary directory;
+3. adds it to the Outlook draft;
+4. saves the draft;
+5. deletes the temporary copy.
+
+Uploaded files are limited to 20 MB per attachment by the MCP server. Base64 data URLs are also accepted.
+
+Both `attachments` and `uploaded_attachments` may be used in the same request.
+
+For `create_bulk_drafts`, an uploaded attachment is materialized once and attached to every generated draft.
+
+## Tables in the message body
+
+Structured tables may be supplied using the `tables` parameter. The server renders them as Outlook-compatible HTML.
+
+```json
+{
+  "to": ["user@company.ru"],
+  "subject": "Meeting protocol",
+  "body": "Agreed actions:",
+  "tables": [
+    {
+      "title": "Actions",
+      "columns": ["Task", "Owner", "Due date"],
+      "rows": [
+        ["Prepare report", "Ivanov", "12.09.2026"]
+      ]
+    }
+  ]
+}
+```
