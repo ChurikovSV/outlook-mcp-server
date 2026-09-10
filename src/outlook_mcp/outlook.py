@@ -6,14 +6,24 @@ from html import escape
 from pathlib import Path
 
 import pythoncom
-import win32com.client
+import win32com.client as win32
 from openpyxl import load_workbook
 
 from .models import BulkEmailRequest, EmailRequest, TableBlock
 
 
 OL_MAIL_ITEM = 0
+OL_DISCARD = 1
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+# Match the COM setup used by the existing working Outlook automation script.
+win32.gencache.is_readonly = True
+
+
+def _get_outlook():
+    """Return Outlook.Application using the same simple COM path as the known working script."""
+    pythoncom.CoInitialize()
+    return win32.Dispatch("Outlook.Application")
 
 
 def _table_to_html(table: TableBlock) -> str:
@@ -177,8 +187,7 @@ def _merge_recipients(
 
 
 def _new_mail(subject: str, body: str, tables: list[TableBlock], attachments: list[str]):
-    pythoncom.CoInitialize()
-    outlook = win32com.client.Dispatch("Outlook.Application")
+    outlook = _get_outlook()
     mail = outlook.CreateItem(OL_MAIL_ITEM)
     mail.Subject = subject
     mail.HTMLBody = _build_html_body(body, tables)
@@ -250,8 +259,25 @@ def send_bulk_email(request: BulkEmailRequest) -> dict:
 
 
 def get_outlook_status() -> dict:
-    pythoncom.CoInitialize()
-    outlook = win32com.client.Dispatch("Outlook.Application")
-    namespace = outlook.GetNamespace("MAPI")
-    accounts = [account.SmtpAddress for account in namespace.Accounts]
-    return {"status": "ok", "accounts": accounts}
+    """Check the exact COM operation the sender needs: Outlook.Application + CreateItem(0)."""
+    outlook = _get_outlook()
+    mail = outlook.CreateItem(OL_MAIL_ITEM)
+
+    version = None
+    try:
+        version = str(outlook.Version)
+    except Exception:
+        pass
+
+    # Do not enumerate MAPI accounts here. Some corporate Outlook environments
+    # block that operation even though CreateItem/Display/Save/Send work normally.
+    try:
+        mail.Close(OL_DISCARD)
+    except Exception:
+        pass
+
+    return {
+        "status": "ok",
+        "create_item": True,
+        "outlook_version": version,
+    }
