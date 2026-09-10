@@ -36,3 +36,18 @@ class BulkEmailRequest(BaseModel):
     tables: list[TableBlock] = Field(default_factory=list)
     attachments: list[str] = Field(default_factory=list)
     uploaded_attachments: list[UploadedAttachment] = Field(default_factory=list)
+
+
+class DraftItem(BaseModel):
+    to: list[str] = Field(default_factory=list)
+    cc: list[str] = Field(default_factory=list)
+    bcc: list[str] = Field(default_factory=list)
+    subject: str
+    body: str = ""
+    tables: list[TableBlock] = Field(default_factory=list)
+    attachments: list[str] = Field(default_factory=list)
+    uploaded_attachments: list[UploadedAttachment] = Field(default_factory=list)
+
+
+class BatchDraftRequest(BaseModel):
+    drafts: list[DraftItem]
