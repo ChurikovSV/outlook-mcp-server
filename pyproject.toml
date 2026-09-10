@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "outlook-mcp-server"
+version = "0.1.0"
+description = "Local MCP server for Microsoft Outlook via win32com"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "mcp>=1.0.0",
+  "pywin32>=306",
+  "pydantic>=2.7",
+]
+
+[project.scripts]
+outlook-mcp = "outlook_mcp.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
