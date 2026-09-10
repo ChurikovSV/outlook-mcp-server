@@ -7,6 +7,11 @@ class TableBlock(BaseModel):
     rows: list[list[str]]
 
 
+class UploadedAttachment(BaseModel):
+    filename: str
+    content_base64: str
+
+
 class EmailRequest(BaseModel):
     to: list[str] = Field(default_factory=list)
     cc: list[str] = Field(default_factory=list)
@@ -18,6 +23,7 @@ class EmailRequest(BaseModel):
     body: str = ""
     tables: list[TableBlock] = Field(default_factory=list)
     attachments: list[str] = Field(default_factory=list)
+    uploaded_attachments: list[UploadedAttachment] = Field(default_factory=list)
 
 
 class BulkEmailRequest(BaseModel):
@@ -29,3 +35,4 @@ class BulkEmailRequest(BaseModel):
     body: str = ""
     tables: list[TableBlock] = Field(default_factory=list)
     attachments: list[str] = Field(default_factory=list)
+    uploaded_attachments: list[UploadedAttachment] = Field(default_factory=list)
