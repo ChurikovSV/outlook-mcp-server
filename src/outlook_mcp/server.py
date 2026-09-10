@@ -8,7 +8,10 @@ from .calendar import (
     list_calendar_events as outlook_list_calendar_events,
     update_calendar_event as outlook_update_calendar_event,
 )
-from .diagnostics import diagnose_outlook as run_outlook_diagnostics
+from .diagnostics import (
+    diagnose_calendar as run_calendar_diagnostics,
+    diagnose_outlook as run_outlook_diagnostics,
+)
 from .models import BatchDraftRequest, BulkEmailRequest, EmailRequest
 from .outlook import create_bulk_drafts as outlook_create_bulk_drafts
 from .outlook import create_draft as outlook_create_draft
@@ -30,6 +33,11 @@ def _build_server(host: str, port: int) -> FastMCP:
     def diagnose_outlook() -> dict:
         """Run step-by-step Outlook COM diagnostics without raising COM errors."""
         return run_outlook_diagnostics()
+
+    @server.tool()
+    def diagnose_calendar() -> dict:
+        """Run step-by-step Outlook calendar diagnostics and identify the failing COM operation."""
+        return run_calendar_diagnostics()
 
     @server.tool()
     def get_outlook_status() -> dict:
