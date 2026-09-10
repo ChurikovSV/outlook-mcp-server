@@ -9,31 +9,37 @@ from .outlook import send_bulk_email as outlook_send_bulk_email
 from .outlook import send_email as outlook_send_email
 
 
-mcp = FastMCP("outlook-mcp-server")
+mcp: FastMCP | None = None
 
 
-@mcp.tool()
-def get_outlook_status() -> dict:
-    """Check Outlook COM availability and return configured accounts."""
-    return outlook_get_status()
+def _build_server(host: str, port: int) -> FastMCP:
+    server = FastMCP(
+        "outlook-mcp-server",
+        host=host,
+        port=port,
+    )
 
+    @server.tool()
+    def get_outlook_status() -> dict:
+        """Check Outlook COM availability and return configured accounts."""
+        return outlook_get_status()
 
-@mcp.tool()
-def create_draft(request: EmailRequest) -> dict:
-    """Create an Outlook draft using recipients from a list and/or TXT/CSV/XLSX file."""
-    return outlook_create_draft(request)
+    @server.tool()
+    def create_draft(request: EmailRequest) -> dict:
+        """Create an Outlook draft using recipients from a list and/or TXT/CSV/XLSX file."""
+        return outlook_create_draft(request)
 
+    @server.tool()
+    def send_email(request: EmailRequest) -> dict:
+        """Send one Outlook email using recipients from a list and/or TXT/CSV/XLSX file."""
+        return outlook_send_email(request)
 
-@mcp.tool()
-def send_email(request: EmailRequest) -> dict:
-    """Send one Outlook email using recipients from a list and/or TXT/CSV/XLSX file."""
-    return outlook_send_email(request)
+    @server.tool()
+    def send_bulk_email(request: BulkEmailRequest) -> dict:
+        """Send a separate Outlook email to each recipient from a list and/or TXT/CSV/XLSX file."""
+        return outlook_send_bulk_email(request)
 
-
-@mcp.tool()
-def send_bulk_email(request: BulkEmailRequest) -> dict:
-    """Send a separate Outlook email to each recipient from a list and/or TXT/CSV/XLSX file."""
-    return outlook_send_bulk_email(request)
+    return server
 
 
 def _parse_args() -> argparse.Namespace:
@@ -60,16 +66,13 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
+    server = _build_server(args.host, args.port)
 
     if args.transport == "stdio":
-        mcp.run(transport="stdio")
+        server.run(transport="stdio")
         return
 
-    mcp.run(
-        transport=args.transport,
-        host=args.host,
-        port=args.port,
-    )
+    server.run(transport=args.transport)
 
 
 if __name__ == "__main__":
