@@ -41,23 +41,136 @@ Checks that Outlook COM is available and returns configured Outlook accounts.
 
 ### `create_draft`
 
-Creates a draft in Outlook. Recommended as the default operation for agents.
+Creates one draft. Recipients can be passed directly and/or loaded from a local `.txt` or `.csv` file.
 
 ### `send_email`
 
-Sends an email immediately through Outlook.
+Sends one email. All `to` recipients are placed into the same message and can see each other.
 
-## Request model
+### `send_bulk_email`
+
+Sends a separate email to every recipient. Use this for distribution lists when recipients must not see the other addresses.
+
+## Send to a recipient list
 
 ```json
 {
-  "to": ["user1@company.ru"],
-  "cc": ["user2@company.ru"],
-  "bcc": [],
+  "to": [
+    "user1@company.ru",
+    "user2@company.ru",
+    "user3@company.ru"
+  ],
   "subject": "Meeting protocol",
-  "body": "Hello!\nPlease find the meeting results below.",
+  "body": "Colleagues, sending the meeting protocol.",
   "tables": [],
   "attachments": []
+}
+```
+
+This request can be used with `create_draft` or `send_email`.
+
+## Send to recipients from TXT
+
+Example `C:\\Work\\mail\\recipients.txt`:
+
+```text
+user1@company.ru
+user2@company.ru
+user3@company.ru
+```
+
+Request:
+
+```json
+{
+  "to": [],
+  "recipient_file": "C:\\Work\\mail\\recipients.txt",
+  "subject": "Meeting protocol",
+  "body": "Colleagues, sending the meeting protocol.",
+  "tables": [],
+  "attachments": []
+}
+```
+
+A TXT file is read as UTF-8. One address per line is recommended. Commas, semicolons and spaces inside a line are also accepted as separators.
+
+## Send to recipients from CSV
+
+Example `C:\\Work\\mail\\recipients.csv`:
+
+```csv
+email,name
+user1@company.ru,Ivan Ivanov
+user2@company.ru,Petr Petrov
+user3@company.ru,Anna Sidorova
+```
+
+Request:
+
+```json
+{
+  "to": [],
+  "recipient_file": "C:\\Work\\mail\\recipients.csv",
+  "recipient_file_column": "email",
+  "subject": "Meeting protocol",
+  "body": "Colleagues, sending the meeting protocol.",
+  "tables": [],
+  "attachments": []
+}
+```
+
+CSV delimiters `,`, `;` and tab are detected automatically. The header is required. The default recipient column is `email`.
+
+For example, if a corporate export contains a column named `Почта`:
+
+```json
+{
+  "recipient_file": "C:\\Work\\mail\\users.csv",
+  "recipient_file_column": "Почта",
+  "subject": "Notification",
+  "body": "Message text"
+}
+```
+
+## Combine a direct list and a file
+
+The two sources can be combined:
+
+```json
+{
+  "to": ["manager@company.ru"],
+  "recipient_file": "C:\\Work\\mail\\team.txt",
+  "subject": "Meeting protocol",
+  "body": "Colleagues, sending the meeting protocol."
+}
+```
+
+Duplicate addresses are removed automatically.
+
+## Individual bulk sending
+
+Use `send_bulk_email` when each recipient should receive a separate message:
+
+```json
+{
+  "recipients": ["manager@company.ru"],
+  "recipient_file": "C:\\Work\\mail\\team.csv",
+  "recipient_file_column": "email",
+  "subject": "Notification",
+  "body": "Message text",
+  "tables": [],
+  "attachments": []
+}
+```
+
+The result contains the total number of recipients, successfully sent messages and per-recipient failures:
+
+```json
+{
+  "status": "completed",
+  "total": 15,
+  "sent": 15,
+  "failed": []
 }
 ```
 
@@ -84,8 +197,6 @@ The agent does not need to generate Outlook-compatible HTML itself. It sends str
 }
 ```
 
-Multiple tables can be passed in the same request by adding more objects to `tables`.
-
 ## Email with attachments
 
 Attachments are local Windows file paths accessible to the Windows user running Outlook and the MCP server.
@@ -95,7 +206,6 @@ Attachments are local Windows file paths accessible to the Windows user running 
   "to": ["team@company.ru"],
   "subject": "Meeting protocol",
   "body": "The full protocol is attached.",
-  "tables": [],
   "attachments": [
     "C:\\Users\\sergey\\Documents\\protocol.docx",
     "C:\\Users\\sergey\\Documents\\metrics.xlsx"
@@ -105,35 +215,9 @@ Attachments are local Windows file paths accessible to the Windows user running 
 
 The server validates that each attachment exists before creating or sending the email.
 
-## Email with a table and attachments
-
-```json
-{
-  "to": ["team@company.ru"],
-  "cc": ["manager@company.ru"],
-  "subject": "Meeting results",
-  "body": "Colleagues, below is a short summary. The detailed report is attached.",
-  "tables": [
-    {
-      "title": "Decisions",
-      "columns": ["Decision", "Responsible", "Status"],
-      "rows": [
-        ["Update dashboard", "Ivanov", "In progress"],
-        ["Validate source data", "Petrov", "Planned"]
-      ]
-    }
-  ],
-  "attachments": [
-    "C:\\Work\\meeting\\report.xlsx"
-  ]
-}
-```
-
 ## Recommended agent policy
 
-For meeting-protocol workflows, prefer `create_draft` by default. Use `send_email` only when the user explicitly asks to send the message.
-
-This allows the user to review recipients, subject, body, tables and attachments in Outlook before sending.
+For meeting-protocol workflows, prefer `create_draft` by default. Use `send_email` or `send_bulk_email` only when the user explicitly asks to send the message.
 
 ## Current scope
 
@@ -143,9 +227,13 @@ Version `0.1.0` supports:
 - configured account listing
 - draft creation
 - direct sending
+- individual bulk sending
+- recipients passed as a list
+- recipients loaded from TXT
+- recipients loaded from CSV
 - To / CC / BCC
 - plain text body rendered as HTML
 - structured HTML tables
 - local file attachments
 
-Planned extensions can include reply/forward, selecting a specific sending account, inline images, draft lookup and meeting-oriented templates.
+Planned extensions can include Excel recipient lists, reply/forward, selecting a specific sending account, inline images, draft lookup and meeting-oriented templates.
