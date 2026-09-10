@@ -14,7 +14,7 @@ import pythoncom
 import win32com.client as win32
 from openpyxl import load_workbook
 
-from .models import BulkEmailRequest, EmailRequest, TableBlock, UploadedAttachment
+from .models import BatchDraftRequest, BulkEmailRequest, EmailRequest, TableBlock, UploadedAttachment
 
 
 OL_MAIL_ITEM = 0
@@ -22,12 +22,10 @@ OL_DISCARD = 1
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 MAX_UPLOADED_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
-# Match the COM setup used by the existing working Outlook automation script.
 win32.gencache.is_readonly = True
 
 
 def _get_outlook():
-    """Return Outlook.Application using the same simple COM path as the known working script."""
     pythoncom.CoInitialize()
     return win32.Dispatch("Outlook.Application")
 
@@ -39,7 +37,6 @@ def _table_to_html(table: TableBlock) -> str:
     for row in table.rows:
         cells = "".join(f"<td>{escape(str(cell))}</td>" for cell in row)
         rows.append(f"<tr>{cells}</tr>")
-
     return (
         f"{title}"
         "<table style='border-collapse:collapse;font-family:Segoe UI,Arial,sans-serif;font-size:10.5pt'>"
@@ -83,13 +80,11 @@ def _decode_uploaded_attachment(upload: UploadedAttachment) -> bytes:
         if "," not in content:
             raise ValueError(f"Invalid data URL for attachment: {upload.filename}")
         content = content.split(",", 1)[1]
-
     compact = "".join(content.split())
     try:
         decoded = base64.b64decode(compact, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise ValueError(f"Invalid base64 content for attachment: {upload.filename}") from exc
-
     if len(decoded) > MAX_UPLOADED_ATTACHMENT_BYTES:
         raise ValueError(
             f"Uploaded attachment '{upload.filename}' exceeds the "
@@ -99,17 +94,13 @@ def _decode_uploaded_attachment(upload: UploadedAttachment) -> bytes:
 
 
 @contextmanager
-def _materialize_uploaded_attachments(
-    uploads: list[UploadedAttachment],
-) -> Iterator[list[Path]]:
+def _materialize_uploaded_attachments(uploads: list[UploadedAttachment]) -> Iterator[list[Path]]:
     if not uploads:
         yield []
         return
-
     with tempfile.TemporaryDirectory(prefix="outlook-mcp-") as temp_dir:
         root = Path(temp_dir)
         paths: list[Path] = []
-
         for index, upload in enumerate(uploads, start=1):
             safe_name = _safe_filename(upload.filename)
             target = root / safe_name
@@ -117,14 +108,12 @@ def _materialize_uploaded_attachments(
                 target = root / f"{index}_{safe_name}"
             target.write_bytes(_decode_uploaded_attachment(upload))
             paths.append(target)
-
         yield paths
 
 
 def _normalize_addresses(addresses: list[str]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
-
     for value in addresses:
         for address in re.split(r"[;,\s]+", value.strip()):
             if not address:
@@ -135,72 +124,45 @@ def _normalize_addresses(addresses: list[str]) -> list[str]:
             if normalized not in seen:
                 seen.add(normalized)
                 result.append(address)
-
     return result
 
 
 def _load_recipients_from_xlsx(path: Path, column: str, sheet: str | None) -> list[str]:
     workbook = load_workbook(path, read_only=True, data_only=True)
     try:
-        if sheet:
-            if sheet not in workbook.sheetnames:
-                raise ValueError(
-                    f"Sheet '{sheet}' not found in XLSX. Available sheets: {', '.join(workbook.sheetnames)}"
-                )
-            worksheet = workbook[sheet]
-        else:
-            worksheet = workbook[workbook.sheetnames[0]]
-
+        worksheet = workbook[sheet] if sheet else workbook[workbook.sheetnames[0]]
+        if sheet and sheet not in workbook.sheetnames:
+            raise ValueError(f"Sheet '{sheet}' not found in XLSX. Available sheets: {', '.join(workbook.sheetnames)}")
         rows = worksheet.iter_rows(values_only=True)
         try:
             header_row = next(rows)
         except StopIteration as exc:
             raise ValueError("XLSX file is empty") from exc
-
         headers = [str(value).strip() if value is not None else "" for value in header_row]
         header_map = {name.lower(): index for index, name in enumerate(headers) if name}
         requested = column.strip().lower()
-
         if requested not in header_map:
             available = ", ".join(name for name in headers if name)
-            raise ValueError(
-                f"Column '{column}' not found in XLSX. Available columns: {available}"
-            )
-
+            raise ValueError(f"Column '{column}' not found in XLSX. Available columns: {available}")
         column_index = header_map[requested]
         values: list[str] = []
-
         for row in rows:
-            if column_index >= len(row):
-                continue
-            value = row[column_index]
-            if value is None:
-                continue
-            text = str(value).strip()
-            if text:
-                values.append(text)
-
+            if column_index < len(row) and row[column_index] is not None:
+                text = str(row[column_index]).strip()
+                if text:
+                    values.append(text)
         return _normalize_addresses(values)
     finally:
         workbook.close()
 
 
-def _load_recipients_from_file(
-    file_path: str,
-    column: str = "email",
-    sheet: str | None = None,
-) -> list[str]:
+def _load_recipients_from_file(file_path: str, column: str = "email", sheet: str | None = None) -> list[str]:
     path = Path(file_path).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Recipient file not found: {path}")
-
     suffix = path.suffix.lower()
-
     if suffix == ".txt":
-        content = path.read_text(encoding="utf-8-sig")
-        values = [line.strip() for line in content.splitlines() if line.strip()]
-        return _normalize_addresses(values)
-
+        return _normalize_addresses([line.strip() for line in path.read_text(encoding="utf-8-sig").splitlines() if line.strip()])
     if suffix == ".csv":
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             sample = handle.read(4096)
@@ -209,78 +171,43 @@ def _load_recipients_from_file(
                 dialect = csv.Sniffer().sniff(sample, delimiters=",;\t")
             except csv.Error:
                 dialect = csv.excel
-
             reader = csv.DictReader(handle, dialect=dialect)
             if not reader.fieldnames:
                 raise ValueError("CSV file has no header row")
-
             field_map = {name.strip().lower(): name for name in reader.fieldnames if name}
-            requested = column.strip().lower()
-            actual_column = field_map.get(requested)
+            actual_column = field_map.get(column.strip().lower())
             if actual_column is None:
-                raise ValueError(
-                    f"Column '{column}' not found in CSV. Available columns: {', '.join(reader.fieldnames)}"
-                )
-
-            values = [str(row.get(actual_column, "")).strip() for row in reader]
-            return _normalize_addresses([value for value in values if value])
-
+                raise ValueError(f"Column '{column}' not found in CSV. Available columns: {', '.join(reader.fieldnames)}")
+            return _normalize_addresses([str(row.get(actual_column, "")).strip() for row in reader if str(row.get(actual_column, "")).strip()])
     if suffix == ".xlsx":
         return _load_recipients_from_xlsx(path, column, sheet)
-
     raise ValueError("Recipient file must be .txt, .csv or .xlsx")
 
 
-def _merge_recipients(
-    addresses: list[str],
-    file_path: str | None,
-    column: str,
-    sheet: str | None = None,
-) -> list[str]:
+def _merge_recipients(addresses: list[str], file_path: str | None, column: str, sheet: str | None = None) -> list[str]:
     combined = list(addresses)
     if file_path:
         combined.extend(_load_recipients_from_file(file_path, column, sheet))
     return _normalize_addresses(combined)
 
 
-def _new_mail(
-    subject: str,
-    body: str,
-    tables: list[TableBlock],
-    attachments: list[str],
-    materialized_uploads: list[Path] | None = None,
-):
+def _new_mail(subject: str, body: str, tables: list[TableBlock], attachments: list[str], materialized_uploads: list[Path] | None = None):
     outlook = _get_outlook()
     mail = outlook.CreateItem(OL_MAIL_ITEM)
     mail.Subject = subject
     mail.HTMLBody = _build_html_body(body, tables)
-
     for path in _validate_attachments(attachments):
         mail.Attachments.Add(str(path))
-
     for path in materialized_uploads or []:
         mail.Attachments.Add(str(path))
-
     return mail
 
 
 def _create_mail(request: EmailRequest, materialized_uploads: list[Path] | None = None):
-    recipients = _merge_recipients(
-        request.to,
-        request.recipient_file,
-        request.recipient_file_column,
-        request.recipient_file_sheet,
-    )
+    recipients = _merge_recipients(request.to, request.recipient_file, request.recipient_file_column, request.recipient_file_sheet)
     if not recipients:
         raise ValueError("At least one recipient is required")
-
-    mail = _new_mail(
-        request.subject,
-        request.body,
-        request.tables,
-        request.attachments,
-        materialized_uploads,
-    )
+    mail = _new_mail(request.subject, request.body, request.tables, request.attachments, materialized_uploads)
     mail.To = "; ".join(recipients)
     mail.CC = "; ".join(_normalize_addresses(request.cc))
     mail.BCC = "; ".join(_normalize_addresses(request.bcc))
@@ -288,44 +215,24 @@ def _create_mail(request: EmailRequest, materialized_uploads: list[Path] | None 
 
 
 def create_draft(request: EmailRequest) -> dict:
-    """Create one Outlook draft. No programmatic send is performed."""
     with _materialize_uploaded_attachments(request.uploaded_attachments) as uploaded_paths:
         mail = _create_mail(request, uploaded_paths)
         mail.Save()
         entry_id = getattr(mail, "EntryID", None)
-
-    return {
-        "status": "draft_created",
-        "entry_id": entry_id,
-        "uploaded_attachments": len(request.uploaded_attachments),
-    }
+    return {"status": "draft_created", "entry_id": entry_id, "uploaded_attachments": len(request.uploaded_attachments)}
 
 
 def create_bulk_drafts(request: BulkEmailRequest) -> dict:
-    """Create one separate Outlook draft per recipient. No programmatic send is performed."""
-    recipients = _merge_recipients(
-        request.recipients,
-        request.recipient_file,
-        request.recipient_file_column,
-        request.recipient_file_sheet,
-    )
+    recipients = _merge_recipients(request.recipients, request.recipient_file, request.recipient_file_column, request.recipient_file_sheet)
     if not recipients:
         raise ValueError("At least one recipient is required")
-
     created = 0
     failed: list[dict[str, str]] = []
     drafts: list[dict[str, str | None]] = []
-
     with _materialize_uploaded_attachments(request.uploaded_attachments) as uploaded_paths:
         for recipient in recipients:
             try:
-                mail = _new_mail(
-                    request.subject,
-                    request.body,
-                    request.tables,
-                    request.attachments,
-                    uploaded_paths,
-                )
+                mail = _new_mail(request.subject, request.body, request.tables, request.attachments, uploaded_paths)
                 mail.To = recipient
                 mail.Save()
                 entry_id = getattr(mail, "EntryID", None)
@@ -333,7 +240,6 @@ def create_bulk_drafts(request: BulkEmailRequest) -> dict:
                 drafts.append({"recipient": recipient, "entry_id": entry_id})
             except Exception as exc:
                 failed.append({"recipient": recipient, "error": str(exc)})
-
     return {
         "status": "completed" if not failed else "completed_with_errors",
         "total": len(recipients),
@@ -344,25 +250,62 @@ def create_bulk_drafts(request: BulkEmailRequest) -> dict:
     }
 
 
+def create_drafts_batch(request: BatchDraftRequest) -> dict:
+    """Create individually prepared drafts in one MCP call. Never calls Send()."""
+    if not request.drafts:
+        raise ValueError("At least one draft is required")
+
+    created = 0
+    failed: list[dict[str, object]] = []
+    drafts: list[dict[str, object]] = []
+
+    for index, item in enumerate(request.drafts):
+        try:
+            email_request = EmailRequest(
+                to=item.to,
+                cc=item.cc,
+                bcc=item.bcc,
+                subject=item.subject,
+                body=item.body,
+                tables=item.tables,
+                attachments=item.attachments,
+                uploaded_attachments=item.uploaded_attachments,
+            )
+            result = create_draft(email_request)
+            created += 1
+            drafts.append({
+                "index": index,
+                "to": item.to,
+                "subject": item.subject,
+                "entry_id": result.get("entry_id"),
+            })
+        except Exception as exc:
+            failed.append({
+                "index": index,
+                "to": item.to,
+                "subject": item.subject,
+                "error": str(exc),
+            })
+
+    return {
+        "status": "completed" if not failed else "completed_with_errors",
+        "total": len(request.drafts),
+        "created": created,
+        "failed": failed,
+        "drafts": drafts,
+    }
+
+
 def get_outlook_status() -> dict:
-    """Check the exact COM operation the draft workflow needs: Outlook.Application + CreateItem(0)."""
     outlook = _get_outlook()
     mail = outlook.CreateItem(OL_MAIL_ITEM)
-
     version = None
     try:
         version = str(outlook.Version)
     except Exception:
         pass
-
     try:
         mail.Close(OL_DISCARD)
     except Exception:
         pass
-
-    return {
-        "status": "ok",
-        "create_item": True,
-        "outlook_version": version,
-        "mode": "draft_only",
-    }
+    return {"status": "ok", "create_item": True, "outlook_version": version, "mode": "draft_only"}
