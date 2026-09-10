@@ -40,9 +40,10 @@ def _build_server(host: str, port: int) -> FastMCP:
         recipient_file_column: str = "email",
         recipient_file_sheet: str | None = None,
         attachments: list[str] | None = None,
+        uploaded_attachments: list[dict] | None = None,
         tables: list[dict] | None = None,
     ) -> dict:
-        """Create one Outlook draft. The server never calls Send()."""
+        """Create one Outlook draft. Supports local paths and base64-uploaded attachments. Never calls Send()."""
         request = EmailRequest(
             to=to,
             cc=cc or [],
@@ -53,6 +54,7 @@ def _build_server(host: str, port: int) -> FastMCP:
             subject=subject,
             body=body,
             attachments=attachments or [],
+            uploaded_attachments=uploaded_attachments or [],
             tables=tables or [],
         )
         return outlook_create_draft(request)
@@ -66,9 +68,10 @@ def _build_server(host: str, port: int) -> FastMCP:
         recipient_file_column: str = "email",
         recipient_file_sheet: str | None = None,
         attachments: list[str] | None = None,
+        uploaded_attachments: list[dict] | None = None,
         tables: list[dict] | None = None,
     ) -> dict:
-        """Create a separate Outlook draft for every recipient. The server never calls Send()."""
+        """Create one Outlook draft per recipient. Supports local paths and base64-uploaded attachments. Never calls Send()."""
         request = BulkEmailRequest(
             recipients=recipients,
             recipient_file=recipient_file,
@@ -77,6 +80,7 @@ def _build_server(host: str, port: int) -> FastMCP:
             subject=subject,
             body=body,
             attachments=attachments or [],
+            uploaded_attachments=uploaded_attachments or [],
             tables=tables or [],
         )
         return outlook_create_bulk_drafts(request)
