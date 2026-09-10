@@ -36,16 +36,39 @@ def _safe_get(item, name: str, default=None):
         return default
 
 
+def _normalize_com_datetime(value) -> datetime | None:
+    """Normalize Outlook/pywintypes datetime values for local naive comparisons.
+
+    Outlook COM can return timezone-aware pywintypes datetime objects while MCP
+    request datetimes are local naive values. Python refuses to compare aware and
+    naive datetimes, which previously caused every calendar item to be skipped.
+    """
+    if value is None:
+        return None
+
+    try:
+        if isinstance(value, datetime):
+            return value.replace(tzinfo=None)
+    except Exception:
+        pass
+
+    try:
+        parsed = datetime.fromisoformat(str(value))
+        return parsed.replace(tzinfo=None)
+    except Exception:
+        return None
+
+
 def _serialize_datetime(value):
+    normalized = _normalize_com_datetime(value)
+    if normalized is not None:
+        return normalized.isoformat()
     if value is None:
         return None
     try:
-        return value.isoformat()
+        return str(value)
     except Exception:
-        try:
-            return str(value)
-        except Exception:
-            return None
+        return None
 
 
 def _serialize_event(item) -> dict:
@@ -84,12 +107,12 @@ def _serialize_event(item) -> dict:
 def list_calendar_events(start: str, end: str, limit: int = 100) -> dict:
     """List calendar items in the requested local datetime range.
 
-    Filtering is done in Python rather than Outlook Restrict(), because Restrict date
-    parsing depends on the Windows/Outlook locale and can interpret 09/10 as October 9
-    on a Russian installation.
+    Filtering is performed in Python to avoid Outlook Restrict() locale-dependent
+    date parsing. Outlook COM datetime values are normalized to local naive
+    datetimes before comparison.
     """
-    start_dt = _parse_datetime(start)
-    end_dt = _parse_datetime(end)
+    start_dt = _parse_datetime(start).replace(tzinfo=None)
+    end_dt = _parse_datetime(end).replace(tzinfo=None)
     if end_dt <= start_dt:
         raise ValueError("end must be later than start")
     if limit < 1 or limit > 500:
@@ -105,38 +128,39 @@ def list_calendar_events(start: str, end: str, limit: int = 100) -> dict:
     events: list[dict] = []
     skipped = 0
     scanned = 0
+    comparison_errors = 0
 
-    # Use Outlook's GetFirst/GetNext COM methods instead of Python enumeration so a
-    # problematic item/property can be skipped without losing the entire response.
     try:
         item = items.GetFirst()
     except Exception as exc:
         raise RuntimeError(f"Unable to read first calendar item: {exc}") from exc
 
-    # Hard safety cap protects against pathological recurring collections.
     max_scan = 10000
 
     while item is not None and scanned < max_scan:
         scanned += 1
-        item_start = _safe_get(item, "Start")
-        item_end = _safe_get(item, "End")
 
-        try:
-            if item_start is not None and item_end is not None:
-                # Once sorted items have moved beyond the requested range, stop early.
+        raw_start = _safe_get(item, "Start")
+        raw_end = _safe_get(item, "End")
+        item_start = _normalize_com_datetime(raw_start)
+        item_end = _normalize_com_datetime(raw_end)
+
+        if item_start is None or item_end is None:
+            skipped += 1
+        else:
+            try:
+                # Items are sorted ascending by Start. Once we move beyond the
+                # requested range there is no need to continue scanning.
                 if item_start >= end_dt:
                     break
+
                 if item_start < end_dt and item_end > start_dt:
-                    try:
-                        events.append(_serialize_event(item))
-                    except Exception:
-                        skipped += 1
+                    events.append(_serialize_event(item))
                     if len(events) >= limit:
                         break
-            else:
+            except Exception:
+                comparison_errors += 1
                 skipped += 1
-        except Exception:
-            skipped += 1
 
         try:
             item = items.GetNext()
@@ -152,7 +176,8 @@ def list_calendar_events(start: str, end: str, limit: int = 100) -> dict:
         "events": events,
         "scanned": scanned,
         "skipped": skipped,
-        "filter_mode": "python_datetime",
+        "comparison_errors": comparison_errors,
+        "filter_mode": "python_datetime_normalized",
     }
 
 
@@ -235,9 +260,9 @@ def update_calendar_event(
     if new_end is not None:
         item.End = new_end
 
-    current_start = item.Start
-    current_end = item.End
-    if current_end <= current_start:
+    current_start = _normalize_com_datetime(item.Start)
+    current_end = _normalize_com_datetime(item.End)
+    if current_start is None or current_end is None or current_end <= current_start:
         raise ValueError("end must be later than start")
 
     if subject is not None:
