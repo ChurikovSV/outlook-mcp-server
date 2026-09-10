@@ -11,6 +11,18 @@ class EmailRequest(BaseModel):
     to: list[str] = Field(default_factory=list)
     cc: list[str] = Field(default_factory=list)
     bcc: list[str] = Field(default_factory=list)
+    recipient_file: str | None = None
+    recipient_file_column: str = "email"
+    subject: str
+    body: str = ""
+    tables: list[TableBlock] = Field(default_factory=list)
+    attachments: list[str] = Field(default_factory=list)
+
+
+class BulkEmailRequest(BaseModel):
+    recipients: list[str] = Field(default_factory=list)
+    recipient_file: str | None = None
+    recipient_file_column: str = "email"
     subject: str
     body: str = ""
     tables: list[TableBlock] = Field(default_factory=list)
