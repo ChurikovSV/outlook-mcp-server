@@ -4,10 +4,9 @@ from mcp.server.fastmcp import FastMCP
 
 from .diagnostics import diagnose_outlook as run_outlook_diagnostics
 from .models import BulkEmailRequest, EmailRequest
+from .outlook import create_bulk_drafts as outlook_create_bulk_drafts
 from .outlook import create_draft as outlook_create_draft
 from .outlook import get_outlook_status as outlook_get_status
-from .outlook import send_bulk_email as outlook_send_bulk_email
-from .outlook import send_email as outlook_send_email
 
 
 mcp: FastMCP | None = None
@@ -27,7 +26,7 @@ def _build_server(host: str, port: int) -> FastMCP:
 
     @server.tool()
     def get_outlook_status() -> dict:
-        """Check whether Outlook COM can create a mail item."""
+        """Check whether Outlook COM can create mail items for draft-only workflows."""
         return outlook_get_status()
 
     @server.tool()
@@ -43,7 +42,7 @@ def _build_server(host: str, port: int) -> FastMCP:
         attachments: list[str] | None = None,
         tables: list[dict] | None = None,
     ) -> dict:
-        """Create an Outlook draft. Recipients may come from a list and/or TXT/CSV/XLSX file."""
+        """Create one Outlook draft. The server never calls Send()."""
         request = EmailRequest(
             to=to,
             cc=cc or [],
@@ -59,35 +58,7 @@ def _build_server(host: str, port: int) -> FastMCP:
         return outlook_create_draft(request)
 
     @server.tool()
-    def send_email(
-        to: list[str],
-        subject: str,
-        body: str = "",
-        cc: list[str] | None = None,
-        bcc: list[str] | None = None,
-        recipient_file: str | None = None,
-        recipient_file_column: str = "email",
-        recipient_file_sheet: str | None = None,
-        attachments: list[str] | None = None,
-        tables: list[dict] | None = None,
-    ) -> dict:
-        """Send one Outlook email. Recipients may come from a list and/or TXT/CSV/XLSX file."""
-        request = EmailRequest(
-            to=to,
-            cc=cc or [],
-            bcc=bcc or [],
-            recipient_file=recipient_file,
-            recipient_file_column=recipient_file_column,
-            recipient_file_sheet=recipient_file_sheet,
-            subject=subject,
-            body=body,
-            attachments=attachments or [],
-            tables=tables or [],
-        )
-        return outlook_send_email(request)
-
-    @server.tool()
-    def send_bulk_email(
+    def create_bulk_drafts(
         recipients: list[str],
         subject: str,
         body: str = "",
@@ -97,7 +68,7 @@ def _build_server(host: str, port: int) -> FastMCP:
         attachments: list[str] | None = None,
         tables: list[dict] | None = None,
     ) -> dict:
-        """Send a separate Outlook email to each recipient from a list and/or TXT/CSV/XLSX file."""
+        """Create a separate Outlook draft for every recipient. The server never calls Send()."""
         request = BulkEmailRequest(
             recipients=recipients,
             recipient_file=recipient_file,
@@ -108,7 +79,7 @@ def _build_server(host: str, port: int) -> FastMCP:
             attachments=attachments or [],
             tables=tables or [],
         )
-        return outlook_send_bulk_email(request)
+        return outlook_create_bulk_drafts(request)
 
     return server
 
