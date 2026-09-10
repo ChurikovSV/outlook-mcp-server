@@ -12,6 +12,7 @@ dependencies = [
   "mcp>=1.0.0",
   "pywin32>=306",
   "pydantic>=2.7",
+  "openpyxl>=3.1",
 ]
 
 [project.scripts]
