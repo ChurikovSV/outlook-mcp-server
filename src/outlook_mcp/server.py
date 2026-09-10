@@ -1,8 +1,9 @@
 from mcp.server.fastmcp import FastMCP
 
-from .models import EmailRequest
+from .models import BulkEmailRequest, EmailRequest
 from .outlook import create_draft as outlook_create_draft
 from .outlook import get_outlook_status as outlook_get_status
+from .outlook import send_bulk_email as outlook_send_bulk_email
 from .outlook import send_email as outlook_send_email
 
 
@@ -17,14 +18,20 @@ def get_outlook_status() -> dict:
 
 @mcp.tool()
 def create_draft(request: EmailRequest) -> dict:
-    """Create an Outlook draft with optional HTML tables and local file attachments."""
+    """Create an Outlook draft using recipients from a list and/or TXT/CSV file."""
     return outlook_create_draft(request)
 
 
 @mcp.tool()
 def send_email(request: EmailRequest) -> dict:
-    """Send an Outlook email with optional HTML tables and local file attachments."""
+    """Send one Outlook email using recipients from a list and/or TXT/CSV file."""
     return outlook_send_email(request)
+
+
+@mcp.tool()
+def send_bulk_email(request: BulkEmailRequest) -> dict:
+    """Send a separate Outlook email to each recipient from a list and/or TXT/CSV file."""
+    return outlook_send_bulk_email(request)
 
 
 def main() -> None:
