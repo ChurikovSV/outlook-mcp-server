@@ -1,20 +1,26 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import csv
 import re
+import tempfile
+from contextlib import contextmanager
 from html import escape
 from pathlib import Path
+from typing import Iterator
 
 import pythoncom
 import win32com.client as win32
 from openpyxl import load_workbook
 
-from .models import BulkEmailRequest, EmailRequest, TableBlock
+from .models import BulkEmailRequest, EmailRequest, TableBlock, UploadedAttachment
 
 
 OL_MAIL_ITEM = 0
 OL_DISCARD = 1
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+MAX_UPLOADED_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
 # Match the COM setup used by the existing working Outlook automation script.
 win32.gencache.is_readonly = True
@@ -62,6 +68,57 @@ def _validate_attachments(paths: list[str]) -> list[Path]:
             raise FileNotFoundError(f"Attachment not found: {path}")
         resolved.append(path)
     return resolved
+
+
+def _safe_filename(filename: str) -> str:
+    safe_name = Path(filename).name.strip()
+    if not safe_name or safe_name in {".", ".."}:
+        raise ValueError("Uploaded attachment filename is empty or invalid")
+    return safe_name
+
+
+def _decode_uploaded_attachment(upload: UploadedAttachment) -> bytes:
+    content = upload.content_base64.strip()
+    if content.startswith("data:"):
+        if "," not in content:
+            raise ValueError(f"Invalid data URL for attachment: {upload.filename}")
+        content = content.split(",", 1)[1]
+
+    compact = "".join(content.split())
+    try:
+        decoded = base64.b64decode(compact, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"Invalid base64 content for attachment: {upload.filename}") from exc
+
+    if len(decoded) > MAX_UPLOADED_ATTACHMENT_BYTES:
+        raise ValueError(
+            f"Uploaded attachment '{upload.filename}' exceeds the "
+            f"{MAX_UPLOADED_ATTACHMENT_BYTES // (1024 * 1024)} MB server limit"
+        )
+    return decoded
+
+
+@contextmanager
+def _materialize_uploaded_attachments(
+    uploads: list[UploadedAttachment],
+) -> Iterator[list[Path]]:
+    if not uploads:
+        yield []
+        return
+
+    with tempfile.TemporaryDirectory(prefix="outlook-mcp-") as temp_dir:
+        root = Path(temp_dir)
+        paths: list[Path] = []
+
+        for index, upload in enumerate(uploads, start=1):
+            safe_name = _safe_filename(upload.filename)
+            target = root / safe_name
+            if target.exists():
+                target = root / f"{index}_{safe_name}"
+            target.write_bytes(_decode_uploaded_attachment(upload))
+            paths.append(target)
+
+        yield paths
 
 
 def _normalize_addresses(addresses: list[str]) -> list[str]:
@@ -186,7 +243,13 @@ def _merge_recipients(
     return _normalize_addresses(combined)
 
 
-def _new_mail(subject: str, body: str, tables: list[TableBlock], attachments: list[str]):
+def _new_mail(
+    subject: str,
+    body: str,
+    tables: list[TableBlock],
+    attachments: list[str],
+    materialized_uploads: list[Path] | None = None,
+):
     outlook = _get_outlook()
     mail = outlook.CreateItem(OL_MAIL_ITEM)
     mail.Subject = subject
@@ -195,10 +258,13 @@ def _new_mail(subject: str, body: str, tables: list[TableBlock], attachments: li
     for path in _validate_attachments(attachments):
         mail.Attachments.Add(str(path))
 
+    for path in materialized_uploads or []:
+        mail.Attachments.Add(str(path))
+
     return mail
 
 
-def _create_mail(request: EmailRequest):
+def _create_mail(request: EmailRequest, materialized_uploads: list[Path] | None = None):
     recipients = _merge_recipients(
         request.to,
         request.recipient_file,
@@ -208,7 +274,13 @@ def _create_mail(request: EmailRequest):
     if not recipients:
         raise ValueError("At least one recipient is required")
 
-    mail = _new_mail(request.subject, request.body, request.tables, request.attachments)
+    mail = _new_mail(
+        request.subject,
+        request.body,
+        request.tables,
+        request.attachments,
+        materialized_uploads,
+    )
     mail.To = "; ".join(recipients)
     mail.CC = "; ".join(_normalize_addresses(request.cc))
     mail.BCC = "; ".join(_normalize_addresses(request.bcc))
@@ -217,10 +289,16 @@ def _create_mail(request: EmailRequest):
 
 def create_draft(request: EmailRequest) -> dict:
     """Create one Outlook draft. No programmatic send is performed."""
-    mail = _create_mail(request)
-    mail.Save()
-    entry_id = getattr(mail, "EntryID", None)
-    return {"status": "draft_created", "entry_id": entry_id}
+    with _materialize_uploaded_attachments(request.uploaded_attachments) as uploaded_paths:
+        mail = _create_mail(request, uploaded_paths)
+        mail.Save()
+        entry_id = getattr(mail, "EntryID", None)
+
+    return {
+        "status": "draft_created",
+        "entry_id": entry_id,
+        "uploaded_attachments": len(request.uploaded_attachments),
+    }
 
 
 def create_bulk_drafts(request: BulkEmailRequest) -> dict:
@@ -238,16 +316,23 @@ def create_bulk_drafts(request: BulkEmailRequest) -> dict:
     failed: list[dict[str, str]] = []
     drafts: list[dict[str, str | None]] = []
 
-    for recipient in recipients:
-        try:
-            mail = _new_mail(request.subject, request.body, request.tables, request.attachments)
-            mail.To = recipient
-            mail.Save()
-            entry_id = getattr(mail, "EntryID", None)
-            created += 1
-            drafts.append({"recipient": recipient, "entry_id": entry_id})
-        except Exception as exc:
-            failed.append({"recipient": recipient, "error": str(exc)})
+    with _materialize_uploaded_attachments(request.uploaded_attachments) as uploaded_paths:
+        for recipient in recipients:
+            try:
+                mail = _new_mail(
+                    request.subject,
+                    request.body,
+                    request.tables,
+                    request.attachments,
+                    uploaded_paths,
+                )
+                mail.To = recipient
+                mail.Save()
+                entry_id = getattr(mail, "EntryID", None)
+                created += 1
+                drafts.append({"recipient": recipient, "entry_id": entry_id})
+            except Exception as exc:
+                failed.append({"recipient": recipient, "error": str(exc)})
 
     return {
         "status": "completed" if not failed else "completed_with_errors",
@@ -255,6 +340,7 @@ def create_bulk_drafts(request: BulkEmailRequest) -> dict:
         "created": created,
         "failed": failed,
         "drafts": drafts,
+        "uploaded_attachments": len(request.uploaded_attachments),
     }
 
 
