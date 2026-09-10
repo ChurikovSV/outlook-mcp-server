@@ -29,38 +29,65 @@ def _parse_datetime(value: str) -> datetime:
         ) from exc
 
 
-def _serialize_event(item) -> dict:
-    attendees: list[str] = []
+def _safe_get(item, name: str, default=None):
     try:
-        for recipient in item.Recipients:
-            address = None
-            try:
-                address = recipient.Address
-            except Exception:
-                pass
-            attendees.append(address or recipient.Name)
+        return getattr(item, name)
     except Exception:
-        pass
+        return default
 
-    start = getattr(item, "Start", None)
-    end = getattr(item, "End", None)
+
+def _serialize_datetime(value):
+    if value is None:
+        return None
+    try:
+        return value.isoformat()
+    except Exception:
+        try:
+            return str(value)
+        except Exception:
+            return None
+
+
+def _serialize_event(item) -> dict:
+    """Serialize an Outlook calendar item without letting one COM property abort the whole request."""
+    attendees: list[str] = []
+    recipients = _safe_get(item, "Recipients")
+    if recipients is not None:
+        try:
+            count = recipients.Count
+            for index in range(1, count + 1):
+                try:
+                    recipient = recipients.Item(index)
+                    address = _safe_get(recipient, "Address")
+                    name = _safe_get(recipient, "Name", "")
+                    if address or name:
+                        attendees.append(address or name)
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
     return {
-        "entry_id": getattr(item, "EntryID", None),
-        "subject": getattr(item, "Subject", ""),
-        "start": start.isoformat() if hasattr(start, "isoformat") else str(start) if start else None,
-        "end": end.isoformat() if hasattr(end, "isoformat") else str(end) if end else None,
-        "location": getattr(item, "Location", ""),
-        "body": getattr(item, "Body", ""),
-        "all_day": bool(getattr(item, "AllDayEvent", False)),
-        "busy_status": getattr(item, "BusyStatus", None),
-        "organizer": getattr(item, "Organizer", None),
+        "entry_id": _safe_get(item, "EntryID"),
+        "subject": _safe_get(item, "Subject", ""),
+        "start": _serialize_datetime(_safe_get(item, "Start")),
+        "end": _serialize_datetime(_safe_get(item, "End")),
+        "location": _safe_get(item, "Location", ""),
+        "body": _safe_get(item, "Body", ""),
+        "all_day": bool(_safe_get(item, "AllDayEvent", False)),
+        "busy_status": _safe_get(item, "BusyStatus"),
+        "organizer": _safe_get(item, "Organizer"),
         "attendees": attendees,
     }
 
 
 def list_calendar_events(start: str, end: str, limit: int = 100) -> dict:
-    """List calendar items in the requested local datetime range."""
+    """List calendar items in the requested local datetime range.
+
+    Filtering is done in Python rather than Outlook Restrict(), because Restrict date
+    parsing depends on the Windows/Outlook locale and can interpret 09/10 as October 9
+    on a Russian installation.
+    """
     start_dt = _parse_datetime(start)
     end_dt = _parse_datetime(end)
     if end_dt <= start_dt:
@@ -75,18 +102,46 @@ def list_calendar_events(start: str, end: str, limit: int = 100) -> dict:
     items.IncludeRecurrences = True
     items.Sort("[Start]")
 
-    # Outlook Restrict expects a locale-style date string. This US-style format is
-    # the most portable form for Outlook's Jet restriction parser.
-    start_filter = start_dt.strftime("%m/%d/%Y %I:%M %p")
-    end_filter = end_dt.strftime("%m/%d/%Y %I:%M %p")
-    restricted = items.Restrict(
-        f"[Start] < '{end_filter}' AND [End] > '{start_filter}'"
-    )
-
     events: list[dict] = []
-    for item in restricted:
-        events.append(_serialize_event(item))
-        if len(events) >= limit:
+    skipped = 0
+    scanned = 0
+
+    # Use Outlook's GetFirst/GetNext COM methods instead of Python enumeration so a
+    # problematic item/property can be skipped without losing the entire response.
+    try:
+        item = items.GetFirst()
+    except Exception as exc:
+        raise RuntimeError(f"Unable to read first calendar item: {exc}") from exc
+
+    # Hard safety cap protects against pathological recurring collections.
+    max_scan = 10000
+
+    while item is not None and scanned < max_scan:
+        scanned += 1
+        item_start = _safe_get(item, "Start")
+        item_end = _safe_get(item, "End")
+
+        try:
+            if item_start is not None and item_end is not None:
+                # Once sorted items have moved beyond the requested range, stop early.
+                if item_start >= end_dt:
+                    break
+                if item_start < end_dt and item_end > start_dt:
+                    try:
+                        events.append(_serialize_event(item))
+                    except Exception:
+                        skipped += 1
+                    if len(events) >= limit:
+                        break
+            else:
+                skipped += 1
+        except Exception:
+            skipped += 1
+
+        try:
+            item = items.GetNext()
+        except Exception:
+            skipped += 1
             break
 
     return {
@@ -95,6 +150,9 @@ def list_calendar_events(start: str, end: str, limit: int = 100) -> dict:
         "end": end_dt.isoformat(),
         "count": len(events),
         "events": events,
+        "scanned": scanned,
+        "skipped": skipped,
+        "filter_mode": "python_datetime",
     }
 
 
@@ -144,7 +202,7 @@ def create_calendar_event(
 
     return {
         "status": "calendar_event_created",
-        "entry_id": getattr(item, "EntryID", None),
+        "entry_id": _safe_get(item, "EntryID"),
         "subject": subject,
         "start": start_dt.isoformat(),
         "end": end_dt.isoformat(),
@@ -177,9 +235,8 @@ def update_calendar_event(
     if new_end is not None:
         item.End = new_end
 
-    # Validate final interval after applying optional changes.
-    current_start = getattr(item, "Start")
-    current_end = getattr(item, "End")
+    current_start = item.Start
+    current_end = item.End
     if current_end <= current_start:
         raise ValueError("end must be later than start")
 
@@ -213,7 +270,7 @@ def delete_calendar_event(entry_id: str) -> dict:
     outlook = _get_outlook()
     namespace = outlook.GetNamespace("MAPI")
     item = namespace.GetItemFromID(entry_id)
-    subject = getattr(item, "Subject", "")
+    subject = _safe_get(item, "Subject", "")
     item.Delete()
     return {
         "status": "calendar_event_deleted",
