@@ -27,22 +27,87 @@ def _build_server(host: str, port: int) -> FastMCP:
 
     @server.tool()
     def get_outlook_status() -> dict:
-        """Check Outlook COM availability and return configured accounts."""
+        """Check whether Outlook COM can create a mail item."""
         return outlook_get_status()
 
     @server.tool()
-    def create_draft(request: EmailRequest) -> dict:
-        """Create an Outlook draft using recipients from a list and/or TXT/CSV/XLSX file."""
+    def create_draft(
+        to: list[str],
+        subject: str,
+        body: str = "",
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        recipient_file: str | None = None,
+        recipient_file_column: str = "email",
+        recipient_file_sheet: str | None = None,
+        attachments: list[str] | None = None,
+        tables: list[dict] | None = None,
+    ) -> dict:
+        """Create an Outlook draft. Recipients may come from a list and/or TXT/CSV/XLSX file."""
+        request = EmailRequest(
+            to=to,
+            cc=cc or [],
+            bcc=bcc or [],
+            recipient_file=recipient_file,
+            recipient_file_column=recipient_file_column,
+            recipient_file_sheet=recipient_file_sheet,
+            subject=subject,
+            body=body,
+            attachments=attachments or [],
+            tables=tables or [],
+        )
         return outlook_create_draft(request)
 
     @server.tool()
-    def send_email(request: EmailRequest) -> dict:
-        """Send one Outlook email using recipients from a list and/or TXT/CSV/XLSX file."""
+    def send_email(
+        to: list[str],
+        subject: str,
+        body: str = "",
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        recipient_file: str | None = None,
+        recipient_file_column: str = "email",
+        recipient_file_sheet: str | None = None,
+        attachments: list[str] | None = None,
+        tables: list[dict] | None = None,
+    ) -> dict:
+        """Send one Outlook email. Recipients may come from a list and/or TXT/CSV/XLSX file."""
+        request = EmailRequest(
+            to=to,
+            cc=cc or [],
+            bcc=bcc or [],
+            recipient_file=recipient_file,
+            recipient_file_column=recipient_file_column,
+            recipient_file_sheet=recipient_file_sheet,
+            subject=subject,
+            body=body,
+            attachments=attachments or [],
+            tables=tables or [],
+        )
         return outlook_send_email(request)
 
     @server.tool()
-    def send_bulk_email(request: BulkEmailRequest) -> dict:
+    def send_bulk_email(
+        recipients: list[str],
+        subject: str,
+        body: str = "",
+        recipient_file: str | None = None,
+        recipient_file_column: str = "email",
+        recipient_file_sheet: str | None = None,
+        attachments: list[str] | None = None,
+        tables: list[dict] | None = None,
+    ) -> dict:
         """Send a separate Outlook email to each recipient from a list and/or TXT/CSV/XLSX file."""
+        request = BulkEmailRequest(
+            recipients=recipients,
+            recipient_file=recipient_file,
+            recipient_file_column=recipient_file_column,
+            recipient_file_sheet=recipient_file_sheet,
+            subject=subject,
+            body=body,
+            attachments=attachments or [],
+            tables=tables or [],
+        )
         return outlook_send_bulk_email(request)
 
     return server
