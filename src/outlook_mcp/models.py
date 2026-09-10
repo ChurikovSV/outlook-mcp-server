@@ -13,6 +13,7 @@ class EmailRequest(BaseModel):
     bcc: list[str] = Field(default_factory=list)
     recipient_file: str | None = None
     recipient_file_column: str = "email"
+    recipient_file_sheet: str | None = None
     subject: str
     body: str = ""
     tables: list[TableBlock] = Field(default_factory=list)
@@ -23,6 +24,7 @@ class BulkEmailRequest(BaseModel):
     recipients: list[str] = Field(default_factory=list)
     recipient_file: str | None = None
     recipient_file_column: str = "email"
+    recipient_file_sheet: str | None = None
     subject: str
     body: str = ""
     tables: list[TableBlock] = Field(default_factory=list)
