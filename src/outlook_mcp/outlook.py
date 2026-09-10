@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pythoncom
 import win32com.client
+from openpyxl import load_workbook
 
 from .models import BulkEmailRequest, EmailRequest, TableBlock
 
@@ -71,7 +72,57 @@ def _normalize_addresses(addresses: list[str]) -> list[str]:
     return result
 
 
-def _load_recipients_from_file(file_path: str, column: str = "email") -> list[str]:
+def _load_recipients_from_xlsx(path: Path, column: str, sheet: str | None) -> list[str]:
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        if sheet:
+            if sheet not in workbook.sheetnames:
+                raise ValueError(
+                    f"Sheet '{sheet}' not found in XLSX. Available sheets: {', '.join(workbook.sheetnames)}"
+                )
+            worksheet = workbook[sheet]
+        else:
+            worksheet = workbook[workbook.sheetnames[0]]
+
+        rows = worksheet.iter_rows(values_only=True)
+        try:
+            header_row = next(rows)
+        except StopIteration as exc:
+            raise ValueError("XLSX file is empty") from exc
+
+        headers = [str(value).strip() if value is not None else "" for value in header_row]
+        header_map = {name.lower(): index for index, name in enumerate(headers) if name}
+        requested = column.strip().lower()
+
+        if requested not in header_map:
+            available = ", ".join(name for name in headers if name)
+            raise ValueError(
+                f"Column '{column}' not found in XLSX. Available columns: {available}"
+            )
+
+        column_index = header_map[requested]
+        values: list[str] = []
+
+        for row in rows:
+            if column_index >= len(row):
+                continue
+            value = row[column_index]
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                values.append(text)
+
+        return _normalize_addresses(values)
+    finally:
+        workbook.close()
+
+
+def _load_recipients_from_file(
+    file_path: str,
+    column: str = "email",
+    sheet: str | None = None,
+) -> list[str]:
     path = Path(file_path).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Recipient file not found: {path}")
@@ -107,13 +158,21 @@ def _load_recipients_from_file(file_path: str, column: str = "email") -> list[st
             values = [str(row.get(actual_column, "")).strip() for row in reader]
             return _normalize_addresses([value for value in values if value])
 
-    raise ValueError("Recipient file must be .txt or .csv")
+    if suffix == ".xlsx":
+        return _load_recipients_from_xlsx(path, column, sheet)
+
+    raise ValueError("Recipient file must be .txt, .csv or .xlsx")
 
 
-def _merge_recipients(addresses: list[str], file_path: str | None, column: str) -> list[str]:
+def _merge_recipients(
+    addresses: list[str],
+    file_path: str | None,
+    column: str,
+    sheet: str | None = None,
+) -> list[str]:
     combined = list(addresses)
     if file_path:
-        combined.extend(_load_recipients_from_file(file_path, column))
+        combined.extend(_load_recipients_from_file(file_path, column, sheet))
     return _normalize_addresses(combined)
 
 
@@ -135,6 +194,7 @@ def _create_mail(request: EmailRequest):
         request.to,
         request.recipient_file,
         request.recipient_file_column,
+        request.recipient_file_sheet,
     )
     if not recipients:
         raise ValueError("At least one recipient is required")
@@ -164,6 +224,7 @@ def send_bulk_email(request: BulkEmailRequest) -> dict:
         request.recipients,
         request.recipient_file,
         request.recipient_file_column,
+        request.recipient_file_sheet,
     )
     if not recipients:
         raise ValueError("At least one recipient is required")
