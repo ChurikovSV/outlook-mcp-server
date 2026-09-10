@@ -31,8 +31,8 @@ def _build_server(host: str, port: int) -> FastMCP:
 
     @server.tool()
     def create_draft(
-        to: list[str],
         subject: str,
+        to: list[str] | None = None,
         body: str = "",
         cc: list[str] | None = None,
         bcc: list[str] | None = None,
@@ -43,9 +43,9 @@ def _build_server(host: str, port: int) -> FastMCP:
         uploaded_attachments: list[dict] | None = None,
         tables: list[dict] | None = None,
     ) -> dict:
-        """Create one Outlook draft. Supports local paths and base64-uploaded attachments. Never calls Send()."""
+        """Create one Outlook draft. Recipients may come from a list and/or a TXT/CSV/XLSX file. Never calls Send()."""
         request = EmailRequest(
-            to=to,
+            to=to or [],
             cc=cc or [],
             bcc=bcc or [],
             recipient_file=recipient_file,
@@ -61,8 +61,8 @@ def _build_server(host: str, port: int) -> FastMCP:
 
     @server.tool()
     def create_bulk_drafts(
-        recipients: list[str],
         subject: str,
+        recipients: list[str] | None = None,
         body: str = "",
         recipient_file: str | None = None,
         recipient_file_column: str = "email",
@@ -71,9 +71,9 @@ def _build_server(host: str, port: int) -> FastMCP:
         uploaded_attachments: list[dict] | None = None,
         tables: list[dict] | None = None,
     ) -> dict:
-        """Create one Outlook draft per recipient. Supports local paths and base64-uploaded attachments. Never calls Send()."""
+        """Create one Outlook draft per recipient. Recipients may come from a list and/or a TXT/CSV/XLSX file. Never calls Send()."""
         request = BulkEmailRequest(
-            recipients=recipients,
+            recipients=recipients or [],
             recipient_file=recipient_file,
             recipient_file_column=recipient_file_column,
             recipient_file_sheet=recipient_file_sheet,
