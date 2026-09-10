@@ -2,6 +2,7 @@ import argparse
 
 from mcp.server.fastmcp import FastMCP
 
+from .diagnostics import diagnose_outlook as run_outlook_diagnostics
 from .models import BulkEmailRequest, EmailRequest
 from .outlook import create_draft as outlook_create_draft
 from .outlook import get_outlook_status as outlook_get_status
@@ -18,6 +19,11 @@ def _build_server(host: str, port: int) -> FastMCP:
         host=host,
         port=port,
     )
+
+    @server.tool()
+    def diagnose_outlook() -> dict:
+        """Run step-by-step Outlook COM diagnostics without raising COM errors."""
+        return run_outlook_diagnostics()
 
     @server.tool()
     def get_outlook_status() -> dict:
