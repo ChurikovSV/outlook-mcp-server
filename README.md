@@ -21,17 +21,53 @@ python -m venv .venv
 pip install -e .
 ```
 
-## Run
+## Run over HTTP (default)
 
 ```powershell
 outlook-mcp
 ```
 
-or:
+By default the server starts with Streamable HTTP on localhost:
+
+```text
+http://127.0.0.1:8000/mcp
+```
+
+Equivalent explicit command:
 
 ```powershell
-python -m outlook_mcp.server
+outlook-mcp --transport streamable-http --host 127.0.0.1 --port 8000
 ```
+
+Use a different port if needed:
+
+```powershell
+outlook-mcp --port 8765
+```
+
+Then the MCP endpoint is:
+
+```text
+http://127.0.0.1:8765/mcp
+```
+
+For security, `127.0.0.1` is the default bind address. Do not expose the server on `0.0.0.0` unless access is intentionally protected and allowed by corporate policy.
+
+## Other transports
+
+stdio is still available:
+
+```powershell
+outlook-mcp --transport stdio
+```
+
+SSE is available only for compatibility with older MCP clients:
+
+```powershell
+outlook-mcp --transport sse --host 127.0.0.1 --port 8000
+```
+
+For new HTTP integrations, use Streamable HTTP rather than SSE.
 
 ## MCP tools
 
@@ -92,20 +128,7 @@ Request:
 }
 ```
 
-A TXT file is read as UTF-8. One address per line is recommended. Commas, semicolons and spaces inside a line are also accepted as separators.
-
 ## Send to recipients from CSV
-
-Example `C:\\Work\\mail\\recipients.csv`:
-
-```csv
-email,name
-user1@company.ru,Ivan Ivanov
-user2@company.ru,Petr Petrov
-user3@company.ru,Anna Sidorova
-```
-
-Request:
 
 ```json
 {
@@ -113,25 +136,23 @@ Request:
   "recipient_file": "C:\\Work\\mail\\recipients.csv",
   "recipient_file_column": "email",
   "subject": "Meeting protocol",
-  "body": "Colleagues, sending the meeting protocol.",
-  "tables": [],
-  "attachments": []
+  "body": "Colleagues, sending the meeting protocol."
 }
 ```
 
-CSV delimiters `,`, `;` and tab are detected automatically. The header is required. The default recipient column is `email`.
+CSV delimiters `,`, `;` and tab are detected automatically. The header is required.
 
-## Send to recipients from Excel XLSX
+## Send to recipients from Excel
 
-The `.xlsx` file is read directly with `openpyxl`; Microsoft Excel does not need to be started.
+Example workbook:
 
-Example workbook `C:\\Work\\mail\\users.xlsx`:
+```text
+Sheet: Получатели
 
-| ФИО | Почта | Подразделение |
-| --- | --- | --- |
-| Иванов Иван | user1@company.ru | Support |
-| Петров Петр | user2@company.ru | DevOps |
-| Сидорова Анна | user3@company.ru | Analytics |
+ФИО             Почта                 Подразделение
+Иванов Иван     ivanov@company.ru     Support
+Петров Петр     petrov@company.ru     DevOps
+```
 
 Request:
 
@@ -139,28 +160,18 @@ Request:
 {
   "to": [],
   "recipient_file": "C:\\Work\\mail\\users.xlsx",
+  "recipient_file_sheet": "Получатели",
   "recipient_file_column": "Почта",
   "subject": "Meeting protocol",
   "body": "Colleagues, sending the meeting protocol."
 }
 ```
 
-By default the first worksheet is used. To select a specific worksheet:
+If `recipient_file_sheet` is omitted, the first worksheet is used.
 
-```json
-{
-  "to": [],
-  "recipient_file": "C:\\Work\\mail\\users.xlsx",
-  "recipient_file_sheet": "Получатели",
-  "recipient_file_column": "Почта",
-  "subject": "Notification",
-  "body": "Message text"
-}
-```
+## Individual bulk sending
 
-Column and worksheet names are passed exactly as they appear in the workbook. Column lookup is case-insensitive and ignores leading/trailing spaces.
-
-Excel recipient files also work with `send_bulk_email`:
+Use `send_bulk_email` when each recipient should receive a separate message:
 
 ```json
 {
@@ -169,72 +180,8 @@ Excel recipient files also work with `send_bulk_email`:
   "recipient_file_sheet": "Получатели",
   "recipient_file_column": "Почта",
   "subject": "Notification",
-  "body": "Message text"
-}
-```
-
-## Combine a direct list and a file
-
-The two sources can be combined:
-
-```json
-{
-  "to": ["manager@company.ru"],
-  "recipient_file": "C:\\Work\\mail\\team.xlsx",
-  "recipient_file_column": "email",
-  "subject": "Meeting protocol",
-  "body": "Colleagues, sending the meeting protocol."
-}
-```
-
-Duplicate addresses are removed automatically.
-
-## Individual bulk sending
-
-Use `send_bulk_email` when each recipient should receive a separate message:
-
-```json
-{
-  "recipients": ["manager@company.ru"],
-  "recipient_file": "C:\\Work\\mail\\team.csv",
-  "recipient_file_column": "email",
-  "subject": "Notification",
   "body": "Message text",
   "tables": [],
-  "attachments": []
-}
-```
-
-The result contains the total number of recipients, successfully sent messages and per-recipient failures:
-
-```json
-{
-  "status": "completed",
-  "total": 15,
-  "sent": 15,
-  "failed": []
-}
-```
-
-## Email with a table
-
-The agent does not need to generate Outlook-compatible HTML itself. It sends structured table data and the MCP server renders it into HTML.
-
-```json
-{
-  "to": ["team@company.ru"],
-  "subject": "Meeting protocol — 10.09.2026",
-  "body": "Colleagues, here are the agreed actions.",
-  "tables": [
-    {
-      "title": "Actions",
-      "columns": ["Task", "Owner", "Due date"],
-      "rows": [
-        ["Prepare report", "Ivan Ivanov", "12.09.2026"],
-        ["Check metrics", "Petr Petrov", "15.09.2026"]
-      ]
-    }
-  ],
   "attachments": []
 }
 ```
@@ -255,30 +202,6 @@ Attachments are local Windows file paths accessible to the Windows user running 
 }
 ```
 
-The server validates that each attachment exists before creating or sending the email.
-
 ## Recommended agent policy
 
 For meeting-protocol workflows, prefer `create_draft` by default. Use `send_email` or `send_bulk_email` only when the user explicitly asks to send the message.
-
-## Current scope
-
-Version `0.1.0` supports:
-
-- Outlook availability check
-- configured account listing
-- draft creation
-- direct sending
-- individual bulk sending
-- recipients passed as a list
-- recipients loaded from TXT
-- recipients loaded from CSV
-- recipients loaded from Excel XLSX
-- selecting an XLSX worksheet and recipient column
-- recipient deduplication and basic email validation
-- To / CC / BCC
-- plain text body rendered as HTML
-- structured HTML tables
-- local file attachments
-
-Planned extensions can include reply/forward, selecting a specific sending account, inline images, draft lookup and meeting-oriented templates.
