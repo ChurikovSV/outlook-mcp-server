@@ -216,19 +216,15 @@ def _create_mail(request: EmailRequest):
 
 
 def create_draft(request: EmailRequest) -> dict:
+    """Create one Outlook draft. No programmatic send is performed."""
     mail = _create_mail(request)
     mail.Save()
     entry_id = getattr(mail, "EntryID", None)
     return {"status": "draft_created", "entry_id": entry_id}
 
 
-def send_email(request: EmailRequest) -> dict:
-    mail = _create_mail(request)
-    mail.Send()
-    return {"status": "sent"}
-
-
-def send_bulk_email(request: BulkEmailRequest) -> dict:
+def create_bulk_drafts(request: BulkEmailRequest) -> dict:
+    """Create one separate Outlook draft per recipient. No programmatic send is performed."""
     recipients = _merge_recipients(
         request.recipients,
         request.recipient_file,
@@ -238,28 +234,32 @@ def send_bulk_email(request: BulkEmailRequest) -> dict:
     if not recipients:
         raise ValueError("At least one recipient is required")
 
-    sent = 0
+    created = 0
     failed: list[dict[str, str]] = []
+    drafts: list[dict[str, str | None]] = []
 
     for recipient in recipients:
         try:
             mail = _new_mail(request.subject, request.body, request.tables, request.attachments)
             mail.To = recipient
-            mail.Send()
-            sent += 1
-        except Exception as exc:  # COM errors need to be returned per recipient
+            mail.Save()
+            entry_id = getattr(mail, "EntryID", None)
+            created += 1
+            drafts.append({"recipient": recipient, "entry_id": entry_id})
+        except Exception as exc:
             failed.append({"recipient": recipient, "error": str(exc)})
 
     return {
         "status": "completed" if not failed else "completed_with_errors",
         "total": len(recipients),
-        "sent": sent,
+        "created": created,
         "failed": failed,
+        "drafts": drafts,
     }
 
 
 def get_outlook_status() -> dict:
-    """Check the exact COM operation the sender needs: Outlook.Application + CreateItem(0)."""
+    """Check the exact COM operation the draft workflow needs: Outlook.Application + CreateItem(0)."""
     outlook = _get_outlook()
     mail = outlook.CreateItem(OL_MAIL_ITEM)
 
@@ -269,8 +269,6 @@ def get_outlook_status() -> dict:
     except Exception:
         pass
 
-    # Do not enumerate MAPI accounts here. Some corporate Outlook environments
-    # block that operation even though CreateItem/Display/Save/Send work normally.
     try:
         mail.Close(OL_DISCARD)
     except Exception:
@@ -280,4 +278,5 @@ def get_outlook_status() -> dict:
         "status": "ok",
         "create_item": True,
         "outlook_version": version,
+        "mode": "draft_only",
     }
