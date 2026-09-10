@@ -3,9 +3,10 @@ import argparse
 from mcp.server.fastmcp import FastMCP
 
 from .diagnostics import diagnose_outlook as run_outlook_diagnostics
-from .models import BulkEmailRequest, EmailRequest
+from .models import BatchDraftRequest, BulkEmailRequest, EmailRequest
 from .outlook import create_bulk_drafts as outlook_create_bulk_drafts
 from .outlook import create_draft as outlook_create_draft
+from .outlook import create_drafts_batch as outlook_create_drafts_batch
 from .outlook import get_outlook_status as outlook_get_status
 
 
@@ -71,7 +72,7 @@ def _build_server(host: str, port: int) -> FastMCP:
         uploaded_attachments: list[dict] | None = None,
         tables: list[dict] | None = None,
     ) -> dict:
-        """Create one Outlook draft per recipient. Recipients may come from a list and/or a TXT/CSV/XLSX file. Never calls Send()."""
+        """Create one Outlook draft per recipient with common content. Never calls Send()."""
         request = BulkEmailRequest(
             recipients=recipients or [],
             recipient_file=recipient_file,
@@ -84,6 +85,12 @@ def _build_server(host: str, port: int) -> FastMCP:
             tables=tables or [],
         )
         return outlook_create_bulk_drafts(request)
+
+    @server.tool()
+    def create_drafts_batch(drafts: list[dict]) -> dict:
+        """Create many fully prepared Outlook drafts in one call. Each item can have its own recipients, subject, body, tables and attachments. Never calls Send()."""
+        request = BatchDraftRequest(drafts=drafts)
+        return outlook_create_drafts_batch(request)
 
     return server
 
