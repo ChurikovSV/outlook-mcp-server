@@ -41,7 +41,7 @@ Checks that Outlook COM is available and returns configured Outlook accounts.
 
 ### `create_draft`
 
-Creates one draft. Recipients can be passed directly and/or loaded from a local `.txt` or `.csv` file.
+Creates one draft. Recipients can be passed directly and/or loaded from a local `.txt`, `.csv` or `.xlsx` file.
 
 ### `send_email`
 
@@ -121,11 +121,52 @@ Request:
 
 CSV delimiters `,`, `;` and tab are detected automatically. The header is required. The default recipient column is `email`.
 
-For example, if a corporate export contains a column named `Почта`:
+## Send to recipients from Excel XLSX
+
+The `.xlsx` file is read directly with `openpyxl`; Microsoft Excel does not need to be started.
+
+Example workbook `C:\\Work\\mail\\users.xlsx`:
+
+| ФИО | Почта | Подразделение |
+| --- | --- | --- |
+| Иванов Иван | user1@company.ru | Support |
+| Петров Петр | user2@company.ru | DevOps |
+| Сидорова Анна | user3@company.ru | Analytics |
+
+Request:
 
 ```json
 {
-  "recipient_file": "C:\\Work\\mail\\users.csv",
+  "to": [],
+  "recipient_file": "C:\\Work\\mail\\users.xlsx",
+  "recipient_file_column": "Почта",
+  "subject": "Meeting protocol",
+  "body": "Colleagues, sending the meeting protocol."
+}
+```
+
+By default the first worksheet is used. To select a specific worksheet:
+
+```json
+{
+  "to": [],
+  "recipient_file": "C:\\Work\\mail\\users.xlsx",
+  "recipient_file_sheet": "Получатели",
+  "recipient_file_column": "Почта",
+  "subject": "Notification",
+  "body": "Message text"
+}
+```
+
+Column and worksheet names are passed exactly as they appear in the workbook. Column lookup is case-insensitive and ignores leading/trailing spaces.
+
+Excel recipient files also work with `send_bulk_email`:
+
+```json
+{
+  "recipients": [],
+  "recipient_file": "C:\\Work\\mail\\users.xlsx",
+  "recipient_file_sheet": "Получатели",
   "recipient_file_column": "Почта",
   "subject": "Notification",
   "body": "Message text"
@@ -139,7 +180,8 @@ The two sources can be combined:
 ```json
 {
   "to": ["manager@company.ru"],
-  "recipient_file": "C:\\Work\\mail\\team.txt",
+  "recipient_file": "C:\\Work\\mail\\team.xlsx",
+  "recipient_file_column": "email",
   "subject": "Meeting protocol",
   "body": "Colleagues, sending the meeting protocol."
 }
@@ -231,9 +273,12 @@ Version `0.1.0` supports:
 - recipients passed as a list
 - recipients loaded from TXT
 - recipients loaded from CSV
+- recipients loaded from Excel XLSX
+- selecting an XLSX worksheet and recipient column
+- recipient deduplication and basic email validation
 - To / CC / BCC
 - plain text body rendered as HTML
 - structured HTML tables
 - local file attachments
 
-Planned extensions can include Excel recipient lists, reply/forward, selecting a specific sending account, inline images, draft lookup and meeting-oriented templates.
+Planned extensions can include reply/forward, selecting a specific sending account, inline images, draft lookup and meeting-oriented templates.
