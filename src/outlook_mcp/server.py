@@ -123,13 +123,15 @@ def _build_server(host: str, port: int) -> FastMCP:
         subject: str,
         start: str,
         end: str,
+        attendees: list[str],
         location: str = "",
         body: str = "",
-        attendees: list[str] | None = None,
         all_day: bool = False,
         reminder_minutes: int | None = 15,
     ) -> dict:
-        """Open a prepared Outlook meeting window for manual review/send. Does not save or send programmatically."""
+        """Open a prepared Outlook meeting window for manual review/send. attendees is required and must contain at least one participant. Does not save or send programmatically."""
+        if not attendees:
+            raise ValueError("prepare_calendar_meeting requires at least one attendee")
         return outlook_prepare_calendar_meeting(
             subject=subject,
             start=start,
