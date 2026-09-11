@@ -2,6 +2,10 @@ import argparse
 
 from mcp.server.fastmcp import FastMCP
 
+from .browser_owa_freebusy import (
+    diagnose_browser_owa as outlook_diagnose_browser_owa,
+    get_browser_owa_free_busy as outlook_get_browser_owa_free_busy,
+)
 from .calendar import (
     create_calendar_event as outlook_create_calendar_event,
     delete_calendar_event as outlook_delete_calendar_event,
@@ -76,7 +80,7 @@ def _build_server(host: str, port: int) -> FastMCP:
 
     @server.tool()
     def diagnose_owa_free_busy(email: str) -> dict:
-        """Test OWA GetUserAvailabilityInternal using Windows Integrated Authentication. Does not use or store browser cookies/canary tokens."""
+        """Test OWA GetUserAvailabilityInternal through direct HTTP. May be blocked by browser-bound authentication."""
         return outlook_diagnose_owa_free_busy(email=email)
 
     @server.tool()
@@ -86,12 +90,34 @@ def _build_server(host: str, port: int) -> FastMCP:
         end: str,
         slot_minutes: int = 30,
     ) -> dict:
-        """Get free/busy from OWA GetUserAvailabilityInternal using Windows Integrated Authentication. Supports one or more employee email addresses."""
+        """Get free/busy through direct OWA HTTP. May be blocked by browser-bound authentication."""
         return outlook_get_owa_free_busy(
             emails=emails,
             start=start,
             end=end,
             slot_minutes=slot_minutes,
+        )
+
+    @server.tool()
+    def diagnose_browser_owa(cdp_url: str | None = None) -> dict:
+        """Connect to an already-running Chromium/SberBrowser via CDP, locate the authenticated mail.sberbank.ru tab, and verify that the active OWA session can be observed. Does not return cookies or canary values."""
+        return outlook_diagnose_browser_owa(cdp_url=cdp_url)
+
+    @server.tool()
+    def get_browser_owa_free_busy(
+        emails: list[str],
+        start: str,
+        end: str,
+        slot_minutes: int = 30,
+        cdp_url: str | None = None,
+    ) -> dict:
+        """Get OWA free/busy by executing GetUserAvailabilityInternal from inside an already-authenticated OWA browser tab connected through Chrome DevTools Protocol. Prefer this when direct HTTP returns 401."""
+        return outlook_get_browser_owa_free_busy(
+            emails=emails,
+            start=start,
+            end=end,
+            slot_minutes=slot_minutes,
+            cdp_url=cdp_url,
         )
 
     @server.tool()
