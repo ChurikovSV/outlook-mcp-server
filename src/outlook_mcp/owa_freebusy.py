@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from urllib.parse import quote
 
 import requests
+import truststore
 from requests_negotiate_sspi import HttpNegotiateAuth
 
 
@@ -17,6 +18,12 @@ FREE_BUSY_LABELS = {
     "3": "out_of_office",
     "4": "working_elsewhere",
 }
+
+# requests normally validates TLS against certifi's CA bundle. Corporate OWA
+# certificates are often signed by an internal enterprise CA that Windows trusts
+# but certifi does not know about. Inject the native Windows trust store into
+# Python's ssl module instead of disabling certificate verification.
+truststore.inject_into_ssl()
 
 
 def _parse_datetime(value: str) -> datetime:
@@ -105,6 +112,7 @@ def diagnose_owa_free_busy(email: str) -> dict:
         "status": "error",
         "email": email,
         "auth_mode": "windows_integrated_auth",
+        "tls_trust": "windows_system_store",
         "steps": [],
     }
 
@@ -196,6 +204,7 @@ def get_owa_free_busy(
             "status": "authentication_required",
             "http_status": response.status_code,
             "auth_mode": "windows_integrated_auth",
+            "tls_trust": "windows_system_store",
             "emails": clean_emails,
             "start": start_dt.isoformat(),
             "end": end_dt.isoformat(),
@@ -234,6 +243,7 @@ def get_owa_free_busy(
     return {
         "status": "ok",
         "auth_mode": "windows_integrated_auth",
+        "tls_trust": "windows_system_store",
         "start": start_dt.isoformat(),
         "end": end_dt.isoformat(),
         "slot_minutes": slot_minutes,
