@@ -282,13 +282,21 @@ def _apply_attendees(item, attendee_list: list[str]) -> tuple[str, list[dict], s
 
     except Exception as recipients_exc:
         try:
+            # In some corporate Outlook configurations Recipients.Add() is blocked,
+            # while assigning RequiredAttendees is still permitted. The setter itself
+            # is the success criterion: reading the property back may be blocked or
+            # return an empty value even though Outlook accepted it for the inspector.
             item.RequiredAttendees = "; ".join(attendee_list)
-            echoed = _safe_get(item, "RequiredAttendees", "")
             attendee_details = [
-                {"requested": attendee, "resolved": None, "fallback": True}
+                {
+                    "requested": attendee,
+                    "resolved": None,
+                    "fallback": True,
+                    "recipients_add_error": repr(recipients_exc),
+                }
                 for attendee in attendee_list
             ]
-            return "required_attendees_property", attendee_details, None if echoed else repr(recipients_exc)
+            return "required_attendees_property", attendee_details, None
         except Exception as fallback_exc:
             return "failed", attendee_details, f"Recipients.Add failed: {recipients_exc!r}; RequiredAttendees failed: {fallback_exc!r}"
 
@@ -459,7 +467,7 @@ def create_calendar_event(
                 except Exception:
                     pass
                 return {
-                    "status": "calendar_event_save_failed",
+                    "status": "calendar_event_save_and_display_failed",
                     "subject": subject,
                     "start": start_dt.isoformat(),
                     "end": end_dt.isoformat(),
@@ -468,7 +476,7 @@ def create_calendar_event(
                     "event_saved": False,
                     "window_opened": False,
                     "invitations_sent": False,
-                    "error": repr(exc),
+                    "save_error": repr(exc),
                     "display_error": repr(display_exc),
                 }
 
