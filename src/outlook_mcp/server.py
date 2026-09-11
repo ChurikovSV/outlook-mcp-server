@@ -7,6 +7,7 @@ from .calendar import (
     delete_calendar_event as outlook_delete_calendar_event,
     diagnose_meeting_attendee as outlook_diagnose_meeting_attendee,
     list_calendar_events as outlook_list_calendar_events,
+    prepare_calendar_meeting as outlook_prepare_calendar_meeting,
     update_calendar_event as outlook_update_calendar_event,
 )
 from .diagnostics import (
@@ -118,6 +119,29 @@ def _build_server(host: str, port: int) -> FastMCP:
         return outlook_list_calendar_events(start=start, end=end, limit=limit)
 
     @server.tool()
+    def prepare_calendar_meeting(
+        subject: str,
+        start: str,
+        end: str,
+        location: str = "",
+        body: str = "",
+        attendees: list[str] | None = None,
+        all_day: bool = False,
+        reminder_minutes: int | None = 15,
+    ) -> dict:
+        """Open a prepared Outlook meeting window for manual review/send. Does not save or send programmatically."""
+        return outlook_prepare_calendar_meeting(
+            subject=subject,
+            start=start,
+            end=end,
+            location=location,
+            body=body,
+            attendees=attendees,
+            all_day=all_day,
+            reminder_minutes=reminder_minutes,
+        )
+
+    @server.tool()
     def create_calendar_event(
         subject: str,
         start: str,
@@ -128,7 +152,7 @@ def _build_server(host: str, port: int) -> FastMCP:
         all_day: bool = False,
         reminder_minutes: int | None = 15,
     ) -> dict:
-        """Create and save an Outlook calendar event without sending invitations."""
+        """Create and save an Outlook calendar event. If saving a meeting with attendees is blocked, opens the prepared meeting window instead. Never calls Send()."""
         return outlook_create_calendar_event(
             subject=subject,
             start=start,
