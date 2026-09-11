@@ -14,6 +14,10 @@ from .diagnostics import (
     diagnose_calendar as run_calendar_diagnostics,
     diagnose_outlook as run_outlook_diagnostics,
 )
+from .freebusy import (
+    diagnose_free_busy as outlook_diagnose_free_busy,
+    get_employee_free_busy as outlook_get_employee_free_busy,
+)
 from .models import BatchDraftRequest, BulkEmailRequest, EmailRequest
 from .outlook import create_bulk_drafts as outlook_create_bulk_drafts
 from .outlook import create_draft as outlook_create_draft
@@ -45,6 +49,26 @@ def _build_server(host: str, port: int) -> FastMCP:
     def diagnose_meeting_attendee(attendee: str) -> dict:
         """Test adding and resolving a meeting attendee without saving or sending anything."""
         return outlook_diagnose_meeting_attendee(attendee)
+
+    @server.tool()
+    def diagnose_free_busy(email: str, slot_minutes: int = 30) -> dict:
+        """Test whether Outlook can resolve an employee and read Exchange free/busy data. Does not modify any calendar."""
+        return outlook_diagnose_free_busy(email=email, slot_minutes=slot_minutes)
+
+    @server.tool()
+    def get_employee_free_busy(
+        email: str,
+        start: str,
+        end: str,
+        slot_minutes: int = 30,
+    ) -> dict:
+        """Get an employee's Outlook/Exchange free-busy intervals for the requested local ISO datetime range."""
+        return outlook_get_employee_free_busy(
+            email=email,
+            start=start,
+            end=end,
+            slot_minutes=slot_minutes,
+        )
 
     @server.tool()
     def get_outlook_status() -> dict:
