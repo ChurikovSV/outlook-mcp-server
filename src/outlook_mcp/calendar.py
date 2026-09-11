@@ -10,6 +10,8 @@ OL_APPOINTMENT_ITEM = 1
 OL_FOLDER_CALENDAR = 9
 OL_MEETING = 1
 OL_BUSY = 2
+OL_REQUIRED = 1
+OL_DISCARD = 1
 
 # Keep COM setup aligned with the mail implementation.
 win32.gencache.is_readonly = True
@@ -37,12 +39,6 @@ def _safe_get(item, name: str, default=None):
 
 
 def _normalize_com_datetime(value) -> datetime | None:
-    """Normalize Outlook/pywintypes datetime values for local naive comparisons.
-
-    Outlook COM can return timezone-aware pywintypes datetime objects while MCP
-    request datetimes are local naive values. Python refuses to compare aware and
-    naive datetimes, which previously caused every calendar item to be skipped.
-    """
     if value is None:
         return None
 
@@ -105,12 +101,7 @@ def _serialize_event(item) -> dict:
 
 
 def list_calendar_events(start: str, end: str, limit: int = 100) -> dict:
-    """List calendar items in the requested local datetime range.
-
-    Filtering is performed in Python to avoid Outlook Restrict() locale-dependent
-    date parsing. Outlook COM datetime values are normalized to local naive
-    datetimes before comparison.
-    """
+    """List calendar items in the requested local datetime range."""
     start_dt = _parse_datetime(start).replace(tzinfo=None)
     end_dt = _parse_datetime(end).replace(tzinfo=None)
     if end_dt <= start_dt:
@@ -149,8 +140,6 @@ def list_calendar_events(start: str, end: str, limit: int = 100) -> dict:
             skipped += 1
         else:
             try:
-                # Items are sorted ascending by Start. Once we move beyond the
-                # requested range there is no need to continue scanning.
                 if item_start >= end_dt:
                     break
 
@@ -179,6 +168,61 @@ def list_calendar_events(start: str, end: str, limit: int = 100) -> dict:
         "comparison_errors": comparison_errors,
         "filter_mode": "python_datetime_normalized",
     }
+
+
+def diagnose_meeting_attendee(attendee: str) -> dict:
+    """Test Outlook meeting-recipient operations without saving or sending a meeting."""
+    result: dict = {"status": "error", "attendee": attendee, "steps": []}
+    item = None
+
+    try:
+        outlook = _get_outlook()
+        result["steps"].append({"step": "get_outlook", "status": "ok"})
+
+        item = outlook.CreateItem(OL_APPOINTMENT_ITEM)
+        result["steps"].append({"step": "create_appointment", "status": "ok"})
+
+        item.MeetingStatus = OL_MEETING
+        result["steps"].append({"step": "set_meeting_status", "status": "ok"})
+
+        recipient = item.Recipients.Add(attendee)
+        result["steps"].append({"step": "add_recipient", "status": "ok"})
+
+        recipient.Type = OL_REQUIRED
+        result["steps"].append({"step": "set_recipient_type", "status": "ok"})
+
+        resolved = bool(recipient.Resolve())
+        result["steps"].append({
+            "step": "resolve_recipient",
+            "status": "ok" if resolved else "not_resolved",
+            "resolved": resolved,
+            "name": _safe_get(recipient, "Name", ""),
+            "address": _safe_get(recipient, "Address", ""),
+        })
+
+        try:
+            resolved_all = bool(item.Recipients.ResolveAll())
+        except Exception as exc:
+            result["steps"].append({"step": "resolve_all", "status": "error", "error": repr(exc)})
+            return result
+
+        result["steps"].append({
+            "step": "resolve_all",
+            "status": "ok" if resolved_all else "not_resolved",
+            "resolved": resolved_all,
+        })
+        result["status"] = "ok" if resolved and resolved_all else "recipient_not_resolved"
+        return result
+
+    except Exception as exc:
+        result["error"] = repr(exc)
+        return result
+    finally:
+        if item is not None:
+            try:
+                item.Close(OL_DISCARD)
+            except Exception:
+                pass
 
 
 def create_calendar_event(
@@ -216,14 +260,74 @@ def create_calendar_event(
         item.ReminderMinutesBeforeStart = reminder_minutes
 
     attendee_list = attendees or []
+    attendee_details: list[dict] = []
+
     if attendee_list:
-        item.MeetingStatus = OL_MEETING
-        for attendee in attendee_list:
-            recipient = item.Recipients.Add(attendee)
-            recipient.Type = 1
+        try:
+            # Microsoft documents this sequence for converting an AppointmentItem
+            # into a meeting request: set MeetingStatus, add recipients, set their
+            # meeting-recipient type, then ResolveAll().
+            item.MeetingStatus = OL_MEETING
+
+            for attendee in attendee_list:
+                recipient = item.Recipients.Add(attendee)
+                recipient.Type = OL_REQUIRED
+                resolved = bool(recipient.Resolve())
+                attendee_details.append({
+                    "requested": attendee,
+                    "resolved": resolved,
+                    "name": _safe_get(recipient, "Name", ""),
+                    "address": _safe_get(recipient, "Address", ""),
+                })
+
+            if not bool(item.Recipients.ResolveAll()):
+                try:
+                    item.Close(OL_DISCARD)
+                except Exception:
+                    pass
+                return {
+                    "status": "attendee_resolution_failed",
+                    "subject": subject,
+                    "start": start_dt.isoformat(),
+                    "end": end_dt.isoformat(),
+                    "attendees": attendee_details,
+                    "event_saved": False,
+                    "invitations_sent": False,
+                }
+        except Exception as exc:
+            try:
+                item.Close(OL_DISCARD)
+            except Exception:
+                pass
+            return {
+                "status": "attendee_setup_failed",
+                "subject": subject,
+                "start": start_dt.isoformat(),
+                "end": end_dt.isoformat(),
+                "attendees": attendee_details,
+                "event_saved": False,
+                "invitations_sent": False,
+                "error": repr(exc),
+            }
 
     # Deliberately Save only. Never call Send(); invitations remain unsent.
-    item.Save()
+    try:
+        item.Save()
+    except Exception as exc:
+        try:
+            item.Close(OL_DISCARD)
+        except Exception:
+            pass
+        return {
+            "status": "calendar_event_save_failed",
+            "subject": subject,
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+            "attendees": attendee_details or attendee_list,
+            "event_saved": False,
+            "invitations_sent": False,
+            "error": repr(exc),
+        }
 
     return {
         "status": "calendar_event_created",
@@ -231,7 +335,8 @@ def create_calendar_event(
         "subject": subject,
         "start": start_dt.isoformat(),
         "end": end_dt.isoformat(),
-        "attendees": attendee_list,
+        "attendees": attendee_details or attendee_list,
+        "event_saved": True,
         "invitations_sent": False,
     }
 
@@ -282,7 +387,6 @@ def update_calendar_event(
         item.ReminderSet = True
         item.ReminderMinutesBeforeStart = reminder_minutes
 
-    # Deliberately Save only. Never call Send().
     item.Save()
 
     result = _serialize_event(item)
