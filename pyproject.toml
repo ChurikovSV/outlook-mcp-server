@@ -16,6 +16,7 @@ dependencies = [
   "requests>=2.32",
   "requests-negotiate-sspi>=0.5.2",
   "truststore>=0.9",
+  "playwright>=1.55",
 ]
 
 [project.scripts]
