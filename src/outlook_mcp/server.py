@@ -5,6 +5,7 @@ from mcp.server.fastmcp import FastMCP
 from .calendar import (
     create_calendar_event as outlook_create_calendar_event,
     delete_calendar_event as outlook_delete_calendar_event,
+    diagnose_meeting_attendee as outlook_diagnose_meeting_attendee,
     list_calendar_events as outlook_list_calendar_events,
     update_calendar_event as outlook_update_calendar_event,
 )
@@ -38,6 +39,11 @@ def _build_server(host: str, port: int) -> FastMCP:
     def diagnose_calendar() -> dict:
         """Run step-by-step Outlook calendar diagnostics and identify the failing COM operation."""
         return run_calendar_diagnostics()
+
+    @server.tool()
+    def diagnose_meeting_attendee(attendee: str) -> dict:
+        """Test adding and resolving a meeting attendee without saving or sending anything."""
+        return outlook_diagnose_meeting_attendee(attendee)
 
     @server.tool()
     def get_outlook_status() -> dict:
