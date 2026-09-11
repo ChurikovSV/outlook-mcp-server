@@ -86,6 +86,11 @@ def _serialize_event(item) -> dict:
         except Exception:
             pass
 
+    if not attendees:
+        required = _safe_get(item, "RequiredAttendees", "")
+        if required:
+            attendees = [part.strip() for part in str(required).split(";") if part.strip()]
+
     return {
         "entry_id": _safe_get(item, "EntryID"),
         "subject": _safe_get(item, "Subject", ""),
@@ -171,7 +176,7 @@ def list_calendar_events(start: str, end: str, limit: int = 100) -> dict:
 
 
 def diagnose_meeting_attendee(attendee: str) -> dict:
-    """Test Outlook meeting-recipient operations without saving or sending a meeting."""
+    """Test Outlook meeting attendee operations without saving or sending a meeting."""
     result: dict = {"status": "error", "attendee": attendee, "steps": []}
     item = None
 
@@ -185,34 +190,59 @@ def diagnose_meeting_attendee(attendee: str) -> dict:
         item.MeetingStatus = OL_MEETING
         result["steps"].append({"step": "set_meeting_status", "status": "ok"})
 
-        recipient = item.Recipients.Add(attendee)
-        result["steps"].append({"step": "add_recipient", "status": "ok"})
-
-        recipient.Type = OL_REQUIRED
-        result["steps"].append({"step": "set_recipient_type", "status": "ok"})
-
-        resolved = bool(recipient.Resolve())
-        result["steps"].append({
-            "step": "resolve_recipient",
-            "status": "ok" if resolved else "not_resolved",
-            "resolved": resolved,
-            "name": _safe_get(recipient, "Name", ""),
-            "address": _safe_get(recipient, "Address", ""),
-        })
-
         try:
-            resolved_all = bool(item.Recipients.ResolveAll())
-        except Exception as exc:
-            result["steps"].append({"step": "resolve_all", "status": "error", "error": repr(exc)})
+            recipient = item.Recipients.Add(attendee)
+            result["steps"].append({"step": "add_recipient", "status": "ok"})
+
+            recipient.Type = OL_REQUIRED
+            result["steps"].append({"step": "set_recipient_type", "status": "ok"})
+
+            resolved = bool(recipient.Resolve())
+            result["steps"].append({
+                "step": "resolve_recipient",
+                "status": "ok" if resolved else "not_resolved",
+                "resolved": resolved,
+                "name": _safe_get(recipient, "Name", ""),
+                "address": _safe_get(recipient, "Address", ""),
+            })
+
+            try:
+                resolved_all = bool(item.Recipients.ResolveAll())
+            except Exception as exc:
+                result["steps"].append({"step": "resolve_all", "status": "error", "error": repr(exc)})
+                return result
+
+            result["steps"].append({
+                "step": "resolve_all",
+                "status": "ok" if resolved_all else "not_resolved",
+                "resolved": resolved_all,
+            })
+            result["status"] = "ok" if resolved and resolved_all else "recipient_not_resolved"
+            result["attendee_mode"] = "recipients_collection"
             return result
 
-        result["steps"].append({
-            "step": "resolve_all",
-            "status": "ok" if resolved_all else "not_resolved",
-            "resolved": resolved_all,
-        })
-        result["status"] = "ok" if resolved and resolved_all else "recipient_not_resolved"
-        return result
+        except Exception as exc:
+            result["steps"].append({"step": "add_recipient", "status": "blocked", "error": repr(exc)})
+
+            try:
+                item.RequiredAttendees = attendee
+                echoed = _safe_get(item, "RequiredAttendees", "")
+                result["steps"].append({
+                    "step": "set_required_attendees_fallback",
+                    "status": "ok",
+                    "value": str(echoed),
+                })
+                result["status"] = "fallback_available"
+                result["attendee_mode"] = "required_attendees_property"
+                return result
+            except Exception as fallback_exc:
+                result["steps"].append({
+                    "step": "set_required_attendees_fallback",
+                    "status": "error",
+                    "error": repr(fallback_exc),
+                })
+                result["error"] = repr(fallback_exc)
+                return result
 
     except Exception as exc:
         result["error"] = repr(exc)
@@ -223,6 +253,47 @@ def diagnose_meeting_attendee(attendee: str) -> dict:
                 item.Close(OL_DISCARD)
             except Exception:
                 pass
+
+
+def _apply_attendees(item, attendee_list: list[str]) -> tuple[str, list[dict], str | None]:
+    """Apply attendees using Recipients when allowed, otherwise RequiredAttendees fallback."""
+    if not attendee_list:
+        return "none", [], None
+
+    item.MeetingStatus = OL_MEETING
+    attendee_details: list[dict] = []
+
+    try:
+        for attendee in attendee_list:
+            recipient = item.Recipients.Add(attendee)
+            recipient.Type = OL_REQUIRED
+            resolved = bool(recipient.Resolve())
+            attendee_details.append({
+                "requested": attendee,
+                "resolved": resolved,
+                "name": _safe_get(recipient, "Name", ""),
+                "address": _safe_get(recipient, "Address", ""),
+            })
+
+        if not bool(item.Recipients.ResolveAll()):
+            return "recipients_collection", attendee_details, "One or more attendees could not be resolved"
+
+        return "recipients_collection", attendee_details, None
+
+    except Exception as recipients_exc:
+        try:
+            # Some corporate Outlook policies block Recipients.Add while still allowing
+            # the read/write RequiredAttendees property. This prepares the meeting for
+            # manual review/sending without calling Send().
+            item.RequiredAttendees = "; ".join(attendee_list)
+            echoed = _safe_get(item, "RequiredAttendees", "")
+            attendee_details = [
+                {"requested": attendee, "resolved": None, "fallback": True}
+                for attendee in attendee_list
+            ]
+            return "required_attendees_property", attendee_details, None if echoed else repr(recipients_exc)
+        except Exception as fallback_exc:
+            return "failed", attendee_details, f"Recipients.Add failed: {recipients_exc!r}; RequiredAttendees failed: {fallback_exc!r}"
 
 
 def create_calendar_event(
@@ -260,57 +331,25 @@ def create_calendar_event(
         item.ReminderMinutesBeforeStart = reminder_minutes
 
     attendee_list = attendees or []
-    attendee_details: list[dict] = []
+    attendee_mode, attendee_details, attendee_error = _apply_attendees(item, attendee_list)
 
-    if attendee_list:
+    if attendee_error:
         try:
-            # Microsoft documents this sequence for converting an AppointmentItem
-            # into a meeting request: set MeetingStatus, add recipients, set their
-            # meeting-recipient type, then ResolveAll().
-            item.MeetingStatus = OL_MEETING
+            item.Close(OL_DISCARD)
+        except Exception:
+            pass
+        return {
+            "status": "attendee_setup_failed",
+            "subject": subject,
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+            "attendees": attendee_details,
+            "attendee_mode": attendee_mode,
+            "event_saved": False,
+            "invitations_sent": False,
+            "error": attendee_error,
+        }
 
-            for attendee in attendee_list:
-                recipient = item.Recipients.Add(attendee)
-                recipient.Type = OL_REQUIRED
-                resolved = bool(recipient.Resolve())
-                attendee_details.append({
-                    "requested": attendee,
-                    "resolved": resolved,
-                    "name": _safe_get(recipient, "Name", ""),
-                    "address": _safe_get(recipient, "Address", ""),
-                })
-
-            if not bool(item.Recipients.ResolveAll()):
-                try:
-                    item.Close(OL_DISCARD)
-                except Exception:
-                    pass
-                return {
-                    "status": "attendee_resolution_failed",
-                    "subject": subject,
-                    "start": start_dt.isoformat(),
-                    "end": end_dt.isoformat(),
-                    "attendees": attendee_details,
-                    "event_saved": False,
-                    "invitations_sent": False,
-                }
-        except Exception as exc:
-            try:
-                item.Close(OL_DISCARD)
-            except Exception:
-                pass
-            return {
-                "status": "attendee_setup_failed",
-                "subject": subject,
-                "start": start_dt.isoformat(),
-                "end": end_dt.isoformat(),
-                "attendees": attendee_details,
-                "event_saved": False,
-                "invitations_sent": False,
-                "error": repr(exc),
-            }
-
-    # Deliberately Save only. Never call Send(); invitations remain unsent.
     try:
         item.Save()
     except Exception as exc:
@@ -324,6 +363,7 @@ def create_calendar_event(
             "start": start_dt.isoformat(),
             "end": end_dt.isoformat(),
             "attendees": attendee_details or attendee_list,
+            "attendee_mode": attendee_mode,
             "event_saved": False,
             "invitations_sent": False,
             "error": repr(exc),
@@ -336,8 +376,10 @@ def create_calendar_event(
         "start": start_dt.isoformat(),
         "end": end_dt.isoformat(),
         "attendees": attendee_details or attendee_list,
+        "attendee_mode": attendee_mode,
         "event_saved": True,
         "invitations_sent": False,
+        "manual_send_required": bool(attendee_list),
     }
 
 
