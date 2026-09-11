@@ -282,9 +282,6 @@ def _apply_attendees(item, attendee_list: list[str]) -> tuple[str, list[dict], s
 
     except Exception as recipients_exc:
         try:
-            # Some corporate Outlook policies block Recipients.Add while still allowing
-            # the read/write RequiredAttendees property. This prepares the meeting for
-            # manual review/sending without calling Send().
             item.RequiredAttendees = "; ".join(attendee_list)
             echoed = _safe_get(item, "RequiredAttendees", "")
             attendee_details = [
@@ -296,17 +293,16 @@ def _apply_attendees(item, attendee_list: list[str]) -> tuple[str, list[dict], s
             return "failed", attendee_details, f"Recipients.Add failed: {recipients_exc!r}; RequiredAttendees failed: {fallback_exc!r}"
 
 
-def create_calendar_event(
+def _build_calendar_item(
     subject: str,
     start: str,
     end: str,
-    location: str = "",
-    body: str = "",
-    attendees: list[str] | None = None,
-    all_day: bool = False,
-    reminder_minutes: int | None = 15,
-) -> dict:
-    """Create and save a calendar event without sending invitations."""
+    location: str,
+    body: str,
+    attendees: list[str] | None,
+    all_day: bool,
+    reminder_minutes: int | None,
+):
     start_dt = _parse_datetime(start)
     end_dt = _parse_datetime(end)
     if end_dt <= start_dt:
@@ -332,6 +328,94 @@ def create_calendar_event(
 
     attendee_list = attendees or []
     attendee_mode, attendee_details, attendee_error = _apply_attendees(item, attendee_list)
+    return item, start_dt, end_dt, attendee_list, attendee_mode, attendee_details, attendee_error
+
+
+def prepare_calendar_meeting(
+    subject: str,
+    start: str,
+    end: str,
+    location: str = "",
+    body: str = "",
+    attendees: list[str] | None = None,
+    all_day: bool = False,
+    reminder_minutes: int | None = 15,
+) -> dict:
+    """Open a prepared Outlook meeting window for manual review/send without saving or sending programmatically."""
+    item, start_dt, end_dt, attendee_list, attendee_mode, attendee_details, attendee_error = _build_calendar_item(
+        subject, start, end, location, body, attendees, all_day, reminder_minutes
+    )
+
+    if attendee_error:
+        try:
+            item.Close(OL_DISCARD)
+        except Exception:
+            pass
+        return {
+            "status": "attendee_setup_failed",
+            "subject": subject,
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+            "attendees": attendee_details,
+            "attendee_mode": attendee_mode,
+            "window_opened": False,
+            "event_saved": False,
+            "invitations_sent": False,
+            "error": attendee_error,
+        }
+
+    try:
+        item.Display()
+    except Exception as exc:
+        try:
+            item.Close(OL_DISCARD)
+        except Exception:
+            pass
+        return {
+            "status": "meeting_window_open_failed",
+            "subject": subject,
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+            "attendees": attendee_details or attendee_list,
+            "attendee_mode": attendee_mode,
+            "window_opened": False,
+            "event_saved": False,
+            "invitations_sent": False,
+            "error": repr(exc),
+        }
+
+    return {
+        "status": "meeting_window_opened",
+        "subject": subject,
+        "start": start_dt.isoformat(),
+        "end": end_dt.isoformat(),
+        "attendees": attendee_details or attendee_list,
+        "attendee_mode": attendee_mode,
+        "window_opened": True,
+        "event_saved": False,
+        "invitations_sent": False,
+        "manual_send_required": bool(attendee_list),
+    }
+
+
+def create_calendar_event(
+    subject: str,
+    start: str,
+    end: str,
+    location: str = "",
+    body: str = "",
+    attendees: list[str] | None = None,
+    all_day: bool = False,
+    reminder_minutes: int | None = 15,
+) -> dict:
+    """Create and save a calendar event without sending invitations.
+
+    If corporate Outlook policy blocks saving a meeting that has attendees, the
+    function falls back to opening the prepared meeting window for manual send.
+    """
+    item, start_dt, end_dt, attendee_list, attendee_mode, attendee_details, attendee_error = _build_calendar_item(
+        subject, start, end, location, body, attendees, all_day, reminder_minutes
+    )
 
     if attendee_error:
         try:
@@ -353,6 +437,41 @@ def create_calendar_event(
     try:
         item.Save()
     except Exception as exc:
+        if attendee_list:
+            try:
+                item.Display()
+                return {
+                    "status": "meeting_window_opened_after_save_block",
+                    "subject": subject,
+                    "start": start_dt.isoformat(),
+                    "end": end_dt.isoformat(),
+                    "attendees": attendee_details or attendee_list,
+                    "attendee_mode": attendee_mode,
+                    "event_saved": False,
+                    "window_opened": True,
+                    "invitations_sent": False,
+                    "manual_send_required": True,
+                    "save_error": repr(exc),
+                }
+            except Exception as display_exc:
+                try:
+                    item.Close(OL_DISCARD)
+                except Exception:
+                    pass
+                return {
+                    "status": "calendar_event_save_failed",
+                    "subject": subject,
+                    "start": start_dt.isoformat(),
+                    "end": end_dt.isoformat(),
+                    "attendees": attendee_details or attendee_list,
+                    "attendee_mode": attendee_mode,
+                    "event_saved": False,
+                    "window_opened": False,
+                    "invitations_sent": False,
+                    "error": repr(exc),
+                    "display_error": repr(display_exc),
+                }
+
         try:
             item.Close(OL_DISCARD)
         except Exception:
