@@ -18,6 +18,10 @@ from .freebusy import (
     diagnose_free_busy as outlook_diagnose_free_busy,
     get_employee_free_busy as outlook_get_employee_free_busy,
 )
+from .owa_freebusy import (
+    diagnose_owa_free_busy as outlook_diagnose_owa_free_busy,
+    get_owa_free_busy as outlook_get_owa_free_busy,
+)
 from .models import BatchDraftRequest, BulkEmailRequest, EmailRequest
 from .outlook import create_bulk_drafts as outlook_create_bulk_drafts
 from .outlook import create_draft as outlook_create_draft
@@ -52,7 +56,7 @@ def _build_server(host: str, port: int) -> FastMCP:
 
     @server.tool()
     def diagnose_free_busy(email: str, slot_minutes: int = 30) -> dict:
-        """Test whether Outlook can resolve an employee and read Exchange free/busy data. Does not modify any calendar."""
+        """Test whether Outlook COM can resolve an employee and read Exchange free/busy data."""
         return outlook_diagnose_free_busy(email=email, slot_minutes=slot_minutes)
 
     @server.tool()
@@ -62,9 +66,29 @@ def _build_server(host: str, port: int) -> FastMCP:
         end: str,
         slot_minutes: int = 30,
     ) -> dict:
-        """Get an employee's Outlook/Exchange free-busy intervals for the requested local ISO datetime range."""
+        """Get an employee's free/busy using Outlook COM. Corporate policy may block this path."""
         return outlook_get_employee_free_busy(
             email=email,
+            start=start,
+            end=end,
+            slot_minutes=slot_minutes,
+        )
+
+    @server.tool()
+    def diagnose_owa_free_busy(email: str) -> dict:
+        """Test OWA GetUserAvailabilityInternal using Windows Integrated Authentication. Does not use or store browser cookies/canary tokens."""
+        return outlook_diagnose_owa_free_busy(email=email)
+
+    @server.tool()
+    def get_owa_free_busy(
+        emails: list[str],
+        start: str,
+        end: str,
+        slot_minutes: int = 30,
+    ) -> dict:
+        """Get free/busy from OWA GetUserAvailabilityInternal using Windows Integrated Authentication. Supports one or more employee email addresses."""
+        return outlook_get_owa_free_busy(
+            emails=emails,
             start=start,
             end=end,
             slot_minutes=slot_minutes,
