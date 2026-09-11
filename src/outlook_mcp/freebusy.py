@@ -31,8 +31,16 @@ def _parse_datetime(value: str) -> datetime:
         ) from exc
 
 
+def _try_free_busy(recipient, start_dt: datetime, slot_minutes: int) -> tuple[str | None, str | None]:
+    """Try FreeBusy directly. Some Outlook/Exchange setups can resolve implicitly here."""
+    try:
+        return str(recipient.FreeBusy(start_dt, slot_minutes, True)), None
+    except Exception as exc:
+        return None, repr(exc)
+
+
 def diagnose_free_busy(email: str, slot_minutes: int = 30) -> dict:
-    """Test CreateRecipient -> Resolve -> FreeBusy without modifying calendar data."""
+    """Test CreateRecipient, Resolve and direct FreeBusy without modifying calendar data."""
     if not email.strip():
         raise ValueError("email is required")
     if slot_minutes < 5 or slot_minutes > 1440:
@@ -50,27 +58,45 @@ def diagnose_free_busy(email: str, slot_minutes: int = 30) -> dict:
         recipient = namespace.CreateRecipient(email)
         result["steps"].append({"step": "create_recipient", "status": "ok"})
 
-        resolved = bool(recipient.Resolve())
-        result["steps"].append({
-            "step": "resolve_recipient",
-            "status": "ok" if resolved else "not_resolved",
-            "resolved": resolved,
-            "name": str(getattr(recipient, "Name", "")),
-        })
-        if not resolved:
-            result["status"] = "recipient_not_resolved"
-            return result
+        resolved = False
+        try:
+            resolved = bool(recipient.Resolve())
+            result["steps"].append({
+                "step": "resolve_recipient",
+                "status": "ok" if resolved else "not_resolved",
+                "resolved": resolved,
+                "name": str(getattr(recipient, "Name", "")),
+            })
+        except Exception as exc:
+            result["steps"].append({
+                "step": "resolve_recipient",
+                "status": "blocked",
+                "error": repr(exc),
+            })
 
         start = datetime.now().replace(second=0, microsecond=0)
-        raw = str(recipient.FreeBusy(start, slot_minutes, True))
+        raw, free_busy_error = _try_free_busy(recipient, start, slot_minutes)
+        if raw is not None:
+            result["steps"].append({
+                "step": "free_busy",
+                "status": "ok",
+                "slot_minutes": slot_minutes,
+                "characters": len(raw),
+                "sample": raw[:48],
+                "implicit_resolution": not resolved,
+            })
+            result["status"] = "ok"
+            result["mode"] = "resolved_recipient" if resolved else "free_busy_without_explicit_resolve"
+            return result
+
         result["steps"].append({
             "step": "free_busy",
-            "status": "ok",
-            "slot_minutes": slot_minutes,
-            "characters": len(raw),
-            "sample": raw[:48],
+            "status": "blocked",
+            "error": free_busy_error,
+            "attempted_without_explicit_resolve": not resolved,
         })
-        result["status"] = "ok"
+        result["status"] = "free_busy_blocked"
+        result["error"] = free_busy_error
         return result
 
     except Exception as exc:
@@ -132,18 +158,29 @@ def get_employee_free_busy(
     namespace = outlook.GetNamespace("MAPI")
     recipient = namespace.CreateRecipient(email)
 
-    if not bool(recipient.Resolve()):
+    resolved = False
+    resolve_error = None
+    try:
+        resolved = bool(recipient.Resolve())
+    except Exception as exc:
+        resolve_error = repr(exc)
+
+    raw, free_busy_error = _try_free_busy(recipient, start_dt, slot_minutes)
+    if raw is None:
         return {
-            "status": "recipient_not_resolved",
+            "status": "free_busy_blocked",
             "email": email,
             "start": start_dt.isoformat(),
             "end": end_dt.isoformat(),
             "slot_minutes": slot_minutes,
+            "resolved": resolved,
+            "resolve_error": resolve_error,
+            "free_busy_error": free_busy_error,
             "slots": [],
+            "free_slots": [],
             "intervals": [],
         }
 
-    raw = str(recipient.FreeBusy(start_dt, slot_minutes, True))
     states = raw[:slots_needed]
 
     slots: list[dict] = []
@@ -168,7 +205,10 @@ def get_employee_free_busy(
     return {
         "status": "ok",
         "email": email,
-        "resolved_name": str(getattr(recipient, "Name", "")),
+        "resolved": resolved,
+        "resolve_error": resolve_error,
+        "mode": "resolved_recipient" if resolved else "free_busy_without_explicit_resolve",
+        "resolved_name": str(getattr(recipient, "Name", "")) if resolved else "",
         "start": start_dt.isoformat(),
         "end": end_dt.isoformat(),
         "slot_minutes": slot_minutes,
