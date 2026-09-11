@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 from datetime import datetime, timedelta
 from urllib.parse import quote
@@ -77,11 +78,35 @@ def _build_payload(emails: list[str], start_dt: datetime, end_dt: datetime, slot
     }
 
 
+def _auth_config() -> tuple[str, object | None, dict[str, str]]:
+    """Choose OWA authentication without persisting browser secrets in source code.
+
+    If OUTLOOK_MCP_OWA_COOKIE and OUTLOOK_MCP_OWA_CANARY are present, reuse the
+    user's active OWA browser session. Otherwise try Windows Integrated Auth.
+    """
+    cookie = os.getenv("OUTLOOK_MCP_OWA_COOKIE", "").strip()
+    canary = os.getenv("OUTLOOK_MCP_OWA_CANARY", "").strip()
+
+    if cookie and canary:
+        return (
+            "browser_session_env",
+            None,
+            {
+                "Cookie": cookie,
+                "X-OWA-CANARY": canary,
+                "Origin": "https://mail.sberbank.ru",
+            },
+        )
+
+    return "windows_integrated_auth", HttpNegotiateAuth(), {}
+
+
 def _make_request(emails: list[str], start_dt: datetime, end_dt: datetime, slot_minutes: int):
     payload = _build_payload(emails, start_dt, end_dt, slot_minutes)
     encoded = quote(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), safe="")
     action_id = -random.randint(1000, 999999)
     url = f"{OWA_SERVICE_URL}?action=GetUserAvailabilityInternal&EP=1&ID={action_id}&AC=1"
+    auth_mode, auth, auth_headers = _auth_config()
     headers = {
         "Accept": "*/*",
         "Action": "GetUserAvailabilityInternal",
@@ -91,15 +116,17 @@ def _make_request(emails: list[str], start_dt: datetime, end_dt: datetime, slot_
         "X-OWA-ActionName": "GetUserAvailabilityInternalAction",
         "X-OWA-Attempt": "1",
         "X-OWA-UrlPostData": encoded,
+        **auth_headers,
     }
     response = requests.post(
         url,
         headers=headers,
         data=b"",
-        auth=HttpNegotiateAuth(),
+        auth=auth,
         timeout=20,
+        allow_redirects=False,
     )
-    return response, payload
+    return response, payload, auth_mode
 
 
 def diagnose_owa_free_busy(email: str) -> dict:
@@ -111,26 +138,35 @@ def diagnose_owa_free_busy(email: str) -> dict:
     result = {
         "status": "error",
         "email": email,
-        "auth_mode": "windows_integrated_auth",
         "tls_trust": "windows_system_store",
         "steps": [],
     }
 
     try:
         result["steps"].append({"step": "build_request", "status": "ok"})
-        response, _ = _make_request([email], start_dt, end_dt, 30)
+        response, _, auth_mode = _make_request([email], start_dt, end_dt, 30)
+        result["auth_mode"] = auth_mode
         result["steps"].append({
             "step": "http_post",
             "status": "ok",
             "http_status": response.status_code,
             "content_type": response.headers.get("Content-Type", ""),
+            "location": response.headers.get("Location", ""),
         })
+
+        if 300 <= response.status_code < 400:
+            result["status"] = "authentication_redirect"
+            return result
 
         if response.status_code in (401, 403):
             result["status"] = "authentication_required"
             return result
 
-        response.raise_for_status()
+        if response.status_code >= 400:
+            result["status"] = "http_error"
+            result["response_prefix"] = response.text[:300]
+            return result
+
         try:
             data = response.json()
         except Exception as exc:
@@ -198,12 +234,14 @@ def get_owa_free_busy(
     if end_dt <= start_dt:
         raise ValueError("end must be later than start")
 
-    response, payload = _make_request(clean_emails, start_dt, end_dt, slot_minutes)
-    if response.status_code in (401, 403):
+    response, payload, auth_mode = _make_request(clean_emails, start_dt, end_dt, slot_minutes)
+
+    if 300 <= response.status_code < 400:
         return {
-            "status": "authentication_required",
+            "status": "authentication_redirect",
             "http_status": response.status_code,
-            "auth_mode": "windows_integrated_auth",
+            "location": response.headers.get("Location", ""),
+            "auth_mode": auth_mode,
             "tls_trust": "windows_system_store",
             "emails": clean_emails,
             "start": start_dt.isoformat(),
@@ -211,14 +249,48 @@ def get_owa_free_busy(
             "slot_minutes": slot_minutes,
         }
 
-    response.raise_for_status()
-    data = response.json()
+    if response.status_code in (401, 403):
+        return {
+            "status": "authentication_required",
+            "http_status": response.status_code,
+            "auth_mode": auth_mode,
+            "tls_trust": "windows_system_store",
+            "emails": clean_emails,
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+            "slot_minutes": slot_minutes,
+        }
+
+    if response.status_code >= 400:
+        return {
+            "status": "http_error",
+            "http_status": response.status_code,
+            "auth_mode": auth_mode,
+            "tls_trust": "windows_system_store",
+            "response_prefix": response.text[:300],
+            "emails": clean_emails,
+        }
+
+    try:
+        data = response.json()
+    except Exception as exc:
+        return {
+            "status": "non_json_response",
+            "http_status": response.status_code,
+            "auth_mode": auth_mode,
+            "tls_trust": "windows_system_store",
+            "error": repr(exc),
+            "response_prefix": response.text[:300],
+            "emails": clean_emails,
+        }
+
     body = data.get("Body") or {}
     if body.get("ResponseCode") != "NoError":
         return {
             "status": "owa_error",
             "response_code": body.get("ResponseCode"),
             "response_class": body.get("ResponseClass"),
+            "auth_mode": auth_mode,
             "emails": clean_emails,
         }
 
@@ -242,7 +314,7 @@ def get_owa_free_busy(
 
     return {
         "status": "ok",
-        "auth_mode": "windows_integrated_auth",
+        "auth_mode": auth_mode,
         "tls_trust": "windows_system_store",
         "start": start_dt.isoformat(),
         "end": end_dt.isoformat(),
