@@ -127,6 +127,24 @@ def _normalize_addresses(addresses: list[str]) -> list[str]:
     return result
 
 
+def _normalize_sender(from_email: str | None) -> str | None:
+    if from_email is None:
+        return None
+    value = from_email.strip()
+    if not value:
+        return None
+    if not EMAIL_RE.match(value):
+        raise ValueError(f"Invalid sender email address: {from_email}")
+    return value
+
+
+def _apply_sender(mail, from_email: str | None) -> str | None:
+    sender = _normalize_sender(from_email)
+    if sender:
+        mail.SentOnBehalfOfName = sender
+    return sender
+
+
 def _load_recipients_from_xlsx(path: Path, column: str, sheet: str | None) -> list[str]:
     workbook = load_workbook(path, read_only=True, data_only=True)
     try:
@@ -191,35 +209,49 @@ def _merge_recipients(addresses: list[str], file_path: str | None, column: str, 
     return _normalize_addresses(combined)
 
 
-def _new_mail(subject: str, body: str, tables: list[TableBlock], attachments: list[str], materialized_uploads: list[Path] | None = None):
+def _new_mail(subject: str, body: str, tables: list[TableBlock], attachments: list[str], materialized_uploads: list[Path] | None = None, from_email: str | None = None):
     outlook = _get_outlook()
     mail = outlook.CreateItem(OL_MAIL_ITEM)
+    sender = _apply_sender(mail, from_email)
     mail.Subject = subject
     mail.HTMLBody = _build_html_body(body, tables)
     for path in _validate_attachments(attachments):
         mail.Attachments.Add(str(path))
     for path in materialized_uploads or []:
         mail.Attachments.Add(str(path))
-    return mail
+    return mail, sender
 
 
 def _create_mail(request: EmailRequest, materialized_uploads: list[Path] | None = None):
     recipients = _merge_recipients(request.to, request.recipient_file, request.recipient_file_column, request.recipient_file_sheet)
     if not recipients:
         raise ValueError("At least one recipient is required")
-    mail = _new_mail(request.subject, request.body, request.tables, request.attachments, materialized_uploads)
+    mail, sender = _new_mail(
+        request.subject,
+        request.body,
+        request.tables,
+        request.attachments,
+        materialized_uploads,
+        request.from_email,
+    )
     mail.To = "; ".join(recipients)
     mail.CC = "; ".join(_normalize_addresses(request.cc))
     mail.BCC = "; ".join(_normalize_addresses(request.bcc))
-    return mail
+    return mail, sender
 
 
 def create_draft(request: EmailRequest) -> dict:
     with _materialize_uploaded_attachments(request.uploaded_attachments) as uploaded_paths:
-        mail = _create_mail(request, uploaded_paths)
+        mail, sender = _create_mail(request, uploaded_paths)
         mail.Save()
         entry_id = getattr(mail, "EntryID", None)
-    return {"status": "draft_created", "entry_id": entry_id, "uploaded_attachments": len(request.uploaded_attachments)}
+    return {
+        "status": "draft_created",
+        "entry_id": entry_id,
+        "from_email": sender,
+        "sender_mode": "sent_on_behalf_of" if sender else "default_account",
+        "uploaded_attachments": len(request.uploaded_attachments),
+    }
 
 
 def create_bulk_drafts(request: BulkEmailRequest) -> dict:
@@ -232,12 +264,19 @@ def create_bulk_drafts(request: BulkEmailRequest) -> dict:
     with _materialize_uploaded_attachments(request.uploaded_attachments) as uploaded_paths:
         for recipient in recipients:
             try:
-                mail = _new_mail(request.subject, request.body, request.tables, request.attachments, uploaded_paths)
+                mail, sender = _new_mail(
+                    request.subject,
+                    request.body,
+                    request.tables,
+                    request.attachments,
+                    uploaded_paths,
+                    request.from_email,
+                )
                 mail.To = recipient
                 mail.Save()
                 entry_id = getattr(mail, "EntryID", None)
                 created += 1
-                drafts.append({"recipient": recipient, "entry_id": entry_id})
+                drafts.append({"recipient": recipient, "entry_id": entry_id, "from_email": sender})
             except Exception as exc:
                 failed.append({"recipient": recipient, "error": str(exc)})
     return {
@@ -246,6 +285,8 @@ def create_bulk_drafts(request: BulkEmailRequest) -> dict:
         "created": created,
         "failed": failed,
         "drafts": drafts,
+        "from_email": _normalize_sender(request.from_email),
+        "sender_mode": "sent_on_behalf_of" if _normalize_sender(request.from_email) else "default_account",
         "uploaded_attachments": len(request.uploaded_attachments),
     }
 
@@ -265,6 +306,7 @@ def create_drafts_batch(request: BatchDraftRequest) -> dict:
                 to=item.to,
                 cc=item.cc,
                 bcc=item.bcc,
+                from_email=item.from_email,
                 subject=item.subject,
                 body=item.body,
                 tables=item.tables,
@@ -278,12 +320,14 @@ def create_drafts_batch(request: BatchDraftRequest) -> dict:
                 "to": item.to,
                 "subject": item.subject,
                 "entry_id": result.get("entry_id"),
+                "from_email": result.get("from_email"),
             })
         except Exception as exc:
             failed.append({
                 "index": index,
                 "to": item.to,
                 "subject": item.subject,
+                "from_email": item.from_email,
                 "error": str(exc),
             })
 
