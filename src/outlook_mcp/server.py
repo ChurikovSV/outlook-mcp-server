@@ -22,6 +22,9 @@ from .freebusy import (
     diagnose_free_busy as outlook_diagnose_free_busy,
     get_employee_free_busy as outlook_get_employee_free_busy,
 )
+from .mailbox_calendar_diagnostics import (
+    diagnose_mailbox_calendar as outlook_diagnose_mailbox_calendar,
+)
 from .owa_freebusy import (
     diagnose_owa_free_busy as outlook_diagnose_owa_free_busy,
     get_owa_free_busy as outlook_get_owa_free_busy,
@@ -55,6 +58,17 @@ def _build_server(host: str, port: int) -> FastMCP:
     def diagnose_calendar() -> dict:
         """Run step-by-step Outlook calendar diagnostics and identify the failing COM operation."""
         return run_calendar_diagnostics()
+
+    @server.tool()
+    def diagnose_mailbox_calendar(
+        store_name: str = "Управление программами",
+        sample_limit: int = 5,
+    ) -> dict:
+        """Check read-only access to an additional/shared Outlook Store calendar. Never creates, changes, deletes, saves, or sends anything."""
+        return outlook_diagnose_mailbox_calendar(
+            store_name=store_name,
+            sample_limit=sample_limit,
+        )
 
     @server.tool()
     def diagnose_send_as_account(
