@@ -142,6 +142,7 @@ def _build_server(host: str, port: int) -> FastMCP:
         body: str = "",
         cc: list[str] | None = None,
         bcc: list[str] | None = None,
+        from_email: str | None = None,
         recipient_file: str | None = None,
         recipient_file_column: str = "email",
         recipient_file_sheet: str | None = None,
@@ -149,11 +150,12 @@ def _build_server(host: str, port: int) -> FastMCP:
         uploaded_attachments: list[dict] | None = None,
         tables: list[dict] | None = None,
     ) -> dict:
-        """Create one Outlook draft. Recipients may come from a list and/or a TXT/CSV/XLSX file. Never calls Send()."""
+        """Create one Outlook draft. Optionally set from_email for a shared/delegated mailbox. Never calls Send()."""
         request = EmailRequest(
             to=to or [],
             cc=cc or [],
             bcc=bcc or [],
+            from_email=from_email,
             recipient_file=recipient_file,
             recipient_file_column=recipient_file_column,
             recipient_file_sheet=recipient_file_sheet,
@@ -170,6 +172,7 @@ def _build_server(host: str, port: int) -> FastMCP:
         subject: str,
         recipients: list[str] | None = None,
         body: str = "",
+        from_email: str | None = None,
         recipient_file: str | None = None,
         recipient_file_column: str = "email",
         recipient_file_sheet: str | None = None,
@@ -177,9 +180,10 @@ def _build_server(host: str, port: int) -> FastMCP:
         uploaded_attachments: list[dict] | None = None,
         tables: list[dict] | None = None,
     ) -> dict:
-        """Create one Outlook draft per recipient with common content. Never calls Send()."""
+        """Create one Outlook draft per recipient with common content. Optionally set from_email for a shared/delegated mailbox. Never calls Send()."""
         request = BulkEmailRequest(
             recipients=recipients or [],
+            from_email=from_email,
             recipient_file=recipient_file,
             recipient_file_column=recipient_file_column,
             recipient_file_sheet=recipient_file_sheet,
@@ -193,7 +197,7 @@ def _build_server(host: str, port: int) -> FastMCP:
 
     @server.tool()
     def create_drafts_batch(drafts: list[dict]) -> dict:
-        """Create many fully prepared Outlook drafts in one call. Each item can have its own recipients, subject, body, tables and attachments. Never calls Send()."""
+        """Create many fully prepared Outlook drafts in one call. Each item can have its own from_email, recipients, subject, body, tables and attachments. Never calls Send()."""
         request = BatchDraftRequest(drafts=drafts)
         return outlook_create_drafts_batch(request)
 
