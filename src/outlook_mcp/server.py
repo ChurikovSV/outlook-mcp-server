@@ -22,6 +22,9 @@ from .freebusy import (
     diagnose_free_busy as outlook_diagnose_free_busy,
     get_employee_free_busy as outlook_get_employee_free_busy,
 )
+from .mailbox_calendar import (
+    list_mailbox_calendar_events as outlook_list_mailbox_calendar_events,
+)
 from .mailbox_calendar_diagnostics import (
     diagnose_mailbox_calendar as outlook_diagnose_mailbox_calendar,
 )
@@ -216,8 +219,20 @@ def _build_server(host: str, port: int) -> FastMCP:
         return outlook_create_drafts_batch(request)
 
     @server.tool()
-    def list_calendar_events(start: str, end: str, limit: int = 100) -> dict:
-        """List Outlook calendar events in a local ISO datetime range."""
+    def list_calendar_events(
+        start: str,
+        end: str,
+        limit: int = 100,
+        store_name: str | None = None,
+    ) -> dict:
+        """List Outlook calendar events. Omit store_name for the default calendar, or pass an additional/shared Outlook Store such as 'Управление программами'."""
+        if store_name:
+            return outlook_list_mailbox_calendar_events(
+                store_name=store_name,
+                start=start,
+                end=end,
+                limit=limit,
+            )
         return outlook_list_calendar_events(start=start, end=end, limit=limit)
 
     @server.tool()
