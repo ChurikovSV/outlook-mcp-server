@@ -26,6 +26,9 @@ from .owa_freebusy import (
     diagnose_owa_free_busy as outlook_diagnose_owa_free_busy,
     get_owa_free_busy as outlook_get_owa_free_busy,
 )
+from .send_as_diagnostics import (
+    diagnose_send_as_account as outlook_diagnose_send_as_account,
+)
 from .models import BatchDraftRequest, BulkEmailRequest, EmailRequest
 from .outlook import create_bulk_drafts as outlook_create_bulk_drafts
 from .outlook import create_draft as outlook_create_draft
@@ -52,6 +55,13 @@ def _build_server(host: str, port: int) -> FastMCP:
     def diagnose_calendar() -> dict:
         """Run step-by-step Outlook calendar diagnostics and identify the failing COM operation."""
         return run_calendar_diagnostics()
+
+    @server.tool()
+    def diagnose_send_as_account(
+        email: str = "up_onework@sberbank.ru",
+    ) -> dict:
+        """Check whether Outlook can prepare a draft on behalf of another mailbox without saving or sending it."""
+        return outlook_diagnose_send_as_account(email=email)
 
     @server.tool()
     def diagnose_meeting_attendee(attendee: str) -> dict:
