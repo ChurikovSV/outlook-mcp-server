@@ -28,6 +28,9 @@ from .mailbox_calendar import (
 from .mailbox_calendar_diagnostics import (
     diagnose_mailbox_calendar as outlook_diagnose_mailbox_calendar,
 )
+from .markdown_draft import (
+    create_draft_from_markdown as outlook_create_draft_from_markdown,
+)
 from .owa_freebusy import (
     diagnose_owa_free_busy as outlook_diagnose_owa_free_busy,
     get_owa_free_busy as outlook_get_owa_free_busy,
@@ -183,6 +186,40 @@ def _build_server(host: str, port: int) -> FastMCP:
             tables=tables or [],
         )
         return outlook_create_draft(request)
+
+    @server.tool()
+    def create_draft_from_markdown(
+        subject: str,
+        to: list[str] | None = None,
+        markdown: str | None = None,
+        markdown_file: str | None = None,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        from_email: str | None = None,
+        recipient_file: str | None = None,
+        recipient_file_column: str = "email",
+        recipient_file_sheet: str | None = None,
+        attachments: list[str] | None = None,
+        uploaded_attachments: list[dict] | None = None,
+    ) -> dict:
+        """Create a formatted Outlook draft from Markdown text or a local .md file. Supports from_email for a shared/delegated mailbox such as a GPYa. Never calls Send()."""
+        request = EmailRequest(
+            to=to or [],
+            cc=cc or [],
+            bcc=bcc or [],
+            from_email=from_email,
+            recipient_file=recipient_file,
+            recipient_file_column=recipient_file_column,
+            recipient_file_sheet=recipient_file_sheet,
+            subject=subject,
+            attachments=attachments or [],
+            uploaded_attachments=uploaded_attachments or [],
+        )
+        return outlook_create_draft_from_markdown(
+            request=request,
+            markdown=markdown,
+            markdown_file=markdown_file,
+        )
 
     @server.tool()
     def create_bulk_drafts(
