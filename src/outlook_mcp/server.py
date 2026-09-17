@@ -193,6 +193,7 @@ def _build_server(host: str, port: int) -> FastMCP:
         to: list[str] | None = None,
         markdown: str | None = None,
         markdown_file: str | None = None,
+        template_name: str | None = None,
         variables: dict[str, str] | None = None,
         cc: list[str] | None = None,
         bcc: list[str] | None = None,
@@ -203,7 +204,7 @@ def _build_server(host: str, port: int) -> FastMCP:
         attachments: list[str] | None = None,
         uploaded_attachments: list[dict] | None = None,
     ) -> dict:
-        """Create a formatted Outlook draft from Markdown text or a local .md file. Use {{name}} placeholders with variables for personalization. For one recipient {{email}} is populated automatically. Supports from_email for a shared/delegated mailbox such as a GPYa. Never calls Send()."""
+        """Create a formatted Outlook draft from exactly one source: inline Markdown, a local .md file, or template_name from the server templates directory. Use {{name}} placeholders with variables for personalization. For one recipient {{email}} is populated automatically. Supports from_email for a shared/delegated mailbox such as a GPYa. Never calls Send()."""
         request = EmailRequest(
             to=to or [],
             cc=cc or [],
@@ -220,6 +221,7 @@ def _build_server(host: str, port: int) -> FastMCP:
             request=request,
             markdown=markdown,
             markdown_file=markdown_file,
+            template_name=template_name,
             variables=variables,
         )
 
