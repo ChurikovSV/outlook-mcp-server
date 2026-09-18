@@ -6,6 +6,9 @@ from .browser_owa_freebusy import (
     diagnose_browser_owa as outlook_diagnose_browser_owa,
     get_browser_owa_free_busy as outlook_get_browser_owa_free_busy,
 )
+from .bulk_template import (
+    create_bulk_drafts_from_template as outlook_create_bulk_drafts_from_template,
+)
 from .calendar import (
     create_calendar_event as outlook_create_calendar_event,
     delete_calendar_event as outlook_delete_calendar_event,
@@ -223,6 +226,31 @@ def _build_server(host: str, port: int) -> FastMCP:
             markdown_file=markdown_file,
             template_name=template_name,
             variables=variables,
+        )
+
+    @server.tool()
+    def create_bulk_drafts_from_template(
+        recipient_file: str,
+        template_name: str,
+        subject: str = "",
+        email_column: str = "email",
+        subject_column: str = "subject",
+        sheet: str | None = None,
+        from_email: str | None = None,
+        attachments: list[str] | None = None,
+        uploaded_attachments: list[dict] | None = None,
+    ) -> dict:
+        """Create one personalized Outlook draft per CSV/XLSX row using a named Markdown template. Every file column is available as {{column_name}}. Reserved columns email, subject/Тема, cc, bcc and from_email can also control the draft. Never calls Send()."""
+        return outlook_create_bulk_drafts_from_template(
+            recipient_file=recipient_file,
+            template_name=template_name,
+            subject=subject,
+            email_column=email_column,
+            subject_column=subject_column,
+            sheet=sheet,
+            from_email=from_email,
+            attachments=attachments or [],
+            uploaded_attachments=uploaded_attachments or [],
         )
 
     @server.tool()
