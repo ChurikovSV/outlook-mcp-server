@@ -1,226 +1,448 @@
 # outlook-mcp-server
 
-Local MCP server for Microsoft Outlook on Windows using `pywin32` / `win32com`.
+Локальный MCP-сервер для Microsoft Outlook в Windows: создание черновиков писем, подготовка встреч, работа с календарём и получение занятости сотрудников.
 
-The server does not connect directly to Exchange. It uses the locally configured Outlook profile and Outlook COM automation.
+Почта и календарь используют настроенный профиль Outlook через `pywin32` / `win32com`. Для занятости дополнительно реализованы прямые HTTP-запросы к Outlook Web App (OWA) и запросы из авторизованной вкладки браузера через Chrome DevTools Protocol (CDP).
 
-## Requirements
+**Сервер не вызывает Outlook `Send()`.** Письма создаются как черновики; приглашения, обновления встреч и отмены автоматически не отправляются. Инструменты календаря при этом могут сохранять, изменять и удалять элементы.
 
-- Windows
-- Microsoft Outlook Desktop configured with the corporate Exchange account
-- Python 3.11+
-- Permission to use Outlook COM automation
+## Требования
 
-## Install
+- Windows и установленный Outlook с поддержкой COM-автоматизации.
+- Настроенный профиль Outlook и права на необходимые ящики и календари.
+- Python 3.11 или новее.
+- Разрешение корпоративных политик на используемые операции Outlook.
+- Для OWA — доступ к корпоративному серверу и подходящая авторизация.
+- Для браузерного OWA — запущенный Chromium-совместимый браузер с доступным CDP и авторизованной вкладкой OWA.
+
+OWA-реализация настроена на `https://mail.sberbank.ru` и часовой пояс `Russian Standard Time`. Эти значения заданы в коде; автоматического обнаружения другого сервера Exchange нет.
+
+## Установка
+
+В PowerShell:
 
 ```powershell
 git clone https://github.com/ChurikovSV/outlook-mcp-server.git
 cd outlook-mcp-server
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -e .
+.\.venv\Scripts\python.exe -m pip install -e .
 ```
 
-## Run over HTTP (default)
+Активация виртуального окружения не требуется. Зависимости перечислены в [pyproject.toml](pyproject.toml): MCP SDK, pywin32, Pydantic, openpyxl, requests, SSPI, truststore и Playwright.
+
+Установка из исходников в режиме `-e` сохраняет ожидаемое расположение каталога `templates`.
+
+## Запуск и подключение MCP-клиента
+
+### Streamable HTTP — по умолчанию
 
 ```powershell
-python -m outlook_mcp.server
+.\.venv\Scripts\python.exe -m outlook_mcp.server
 ```
 
-Default MCP endpoint:
+Адрес MCP: `http://127.0.0.1:8000/mcp`.
 
-```text
-http://127.0.0.1:8000/mcp
-```
-
-A different port can be selected with:
+Другой порт:
 
 ```powershell
-python -m outlook_mcp.server --port 8765
+.\.venv\Scripts\python.exe -m outlook_mcp.server --port 8765
 ```
 
-## Draft-only mail mode
+В MCP-клиенте выберите Streamable HTTP и укажите адрес сервера. Клиент должен иметь сетевой доступ к компьютеру с сервером: `127.0.0.1` обозначает компьютер самого клиента.
 
-The server intentionally does not call Outlook `Send()`. Corporate Outlook policies may block programmatic sending, while draft creation remains allowed.
+### stdio
 
-Available mail tools:
+```powershell
+.\.venv\Scripts\python.exe -m outlook_mcp.server --transport stdio
+```
 
-- `get_outlook_status`
-- `diagnose_outlook`
-- `create_draft`
-- `create_bulk_drafts`
-- `create_drafts_batch`
+Для stdio клиент сам запускает процесс. В настройках клиента укажите абсолютный путь к `.venv\Scripts\python.exe` как команду и `-m`, `outlook_mcp.server`, `--transport`, `stdio` как отдельные аргументы.
 
-`create_bulk_drafts` creates one separate Outlook draft per recipient with common content.
+### SSE
 
-`create_drafts_batch` accepts many fully prepared messages in one call, allowing each draft to have its own recipients, subject, body, tables and attachments.
+```powershell
+.\.venv\Scripts\python.exe -m outlook_mcp.server --transport sse --port 8765
+```
 
-## Create one draft
+Используйте этот режим для клиента с поддержкой SSE. Путь SSE при стандартных настройках FastMCP — `/sse`.
+
+| Параметр | По умолчанию | Назначение |
+| --- | --- | --- |
+| `--transport` | `streamable-http` | `streamable-http`, `stdio` или `sse` |
+| `--host` | `127.0.0.1` | Адрес привязки HTTP/SSE |
+| `--port` | `8000` | Порт HTTP/SSE |
+
+Также доступна команда `outlook-mcp` из виртуального окружения.
+
+В проекте не настроена аутентификация MCP-клиентов. Для локальной работы оставьте привязку к `127.0.0.1`; при сетевом размещении отдельно ограничьте доступ.
+
+## Доступные инструменты
+
+Сервер регистрирует 22 инструмента.
+
+### Письма
+
+| Инструмент | Назначение |
+| --- | --- |
+| `create_draft` | Один черновик с текстом, таблицами и вложениями |
+| `create_bulk_drafts` | Отдельный черновик каждому получателю с общим содержимым |
+| `create_drafts_batch` | Пакет писем с индивидуальными адресатами и содержимым |
+| `create_draft_from_markdown` | Черновик из Markdown, файла или именованного шаблона |
+| `create_bulk_drafts_from_template` | Персональный черновик для каждой строки CSV/XLSX |
+
+### Календарь и занятость
+
+| Инструмент | Назначение |
+| --- | --- |
+| `list_calendar_events` | Чтение основного календаря или календаря дополнительного хранилища |
+| `prepare_calendar_meeting` | Открытие окна встречи для проверки и ручной отправки |
+| `create_calendar_event` | Создание и сохранение события |
+| `update_calendar_event` | Изменение и сохранение события |
+| `delete_calendar_event` | Удаление элемента по `entry_id` |
+| `get_employee_free_busy` | Занятость одного сотрудника через Outlook COM |
+| `get_owa_free_busy` | Занятость нескольких сотрудников через прямой HTTP-запрос к OWA |
+| `get_browser_owa_free_busy` | Занятость через авторизованную вкладку OWA и CDP |
+
+### Диагностика
+
+| Инструмент | Назначение |
+| --- | --- |
+| `get_outlook_status` | Проверка создания почтового объекта, версия Outlook |
+| `diagnose_outlook` | Поэтапная проверка COM, MAPI и учётных записей |
+| `diagnose_calendar` | Проверка основного календаря и фильтрации |
+| `diagnose_mailbox_calendar` | Проверка календаря дополнительного/общего хранилища |
+| `diagnose_send_as_account` | Проверка подготовки письма от имени другого ящика |
+| `diagnose_meeting_attendee` | Проверка добавления и разрешения адреса участника |
+| `diagnose_free_busy` | Проверка получения занятости через COM |
+| `diagnose_owa_free_busy` | Проверка прямого HTTP-доступа к OWA |
+| `diagnose_browser_owa` | Проверка CDP, вкладки OWA и получения canary-токена |
+
+## Письма
+
+JSON ниже — аргументы соответствующего MCP-инструмента.
+
+### Один черновик
+
+`create_draft`:
 
 ```json
 {
-  "to": ["user@company.ru"],
-  "subject": "Meeting protocol",
-  "body": "Colleagues, sending the meeting protocol."
+  "to": ["user@example.com"],
+  "subject": "Протокол встречи",
+  "body": "Коллеги, направляю протокол встречи.",
+  "cc": ["manager@example.com"],
+  "attachments": ["C:\\Work\\reports\\protocol.pdf"]
 }
 ```
 
-## Recipients from TXT / CSV / XLSX
+Поддерживаются `cc`, `bcc` и `from_email`. Для другого отправителя используется свойство Outlook `SentOnBehalfOfName`. Создание черновика не подтверждает право отправки от имени этого ящика.
 
-Recipients can be supplied directly and/or loaded from a local file.
+### Получатели из TXT, CSV или XLSX
 
-Excel example:
+Для `create_draft` и `create_bulk_drafts` можно указать `recipient_file`. Адреса из файла объединяются с переданными напрямую; дубликаты удаляются без учёта регистра.
 
 ```json
 {
   "recipient_file": "C:\\Work\\mail\\users.xlsx",
   "recipient_file_sheet": "Получатели",
   "recipient_file_column": "Почта",
-  "subject": "Meeting protocol",
-  "body": "Colleagues, sending the meeting protocol."
+  "subject": "Уведомление",
+  "body": "Коллеги, встреча начнётся в 15:30."
 }
 ```
 
-Supported recipient files:
+- TXT: адреса в текстовом файле.
+- CSV: строка заголовков и столбец адресов; разделитель определяется среди запятой, точки с запятой и табуляции.
+- XLSX: по умолчанию первый лист и столбец `email`; лист и столбец можно выбрать параметрами.
+- TXT и CSV читаются в UTF-8, в том числе с BOM.
 
-- `.txt`
-- `.csv`
-- `.xlsx`
-
-## Create separate drafts for a distribution list
+Для общего письма используйте `create_draft`, для отдельных писем каждому адресату — `create_bulk_drafts`:
 
 ```json
 {
-  "recipients": [
-    "user1@company.ru",
-    "user2@company.ru"
-  ],
-  "subject": "Notification",
-  "body": "Message text"
+  "recipients": ["user1@example.com", "user2@example.com"],
+  "subject": "Уведомление",
+  "body": "Напоминаю о встрече."
 }
 ```
 
-Or use `recipient_file` with `create_bulk_drafts`.
+### Разные письма в одном вызове
 
-## Local file attachments
-
-Files already available on the Windows machine can be attached by path:
+`create_drafts_batch`:
 
 ```json
 {
-  "to": ["user@company.ru"],
-  "subject": "Report",
-  "body": "Report is attached.",
-  "attachments": [
-    "C:\\Work\\reports\\report.xlsx"
+  "drafts": [
+    {
+      "to": ["user1@example.com"],
+      "subject": "Задача по проекту",
+      "body": "Подготовьте отчёт к пятнице."
+    },
+    {
+      "to": ["user2@example.com"],
+      "subject": "Согласование",
+      "body": "Проверьте приложенный документ.",
+      "attachments": ["C:\\Work\\agreement.docx"]
+    }
   ]
 }
 ```
 
-## Files uploaded through the MCP client
+Массовые операции возвращают `created`, `failed` и `drafts`. При частичной ошибке уже созданные черновики остаются. Повтор всего запроса может создать дубликаты.
 
-A client that can read an uploaded file and pass its contents to the MCP tool can use `uploaded_attachments`.
+### Вложения через MCP-клиент
+
+Если клиент может передать содержимое файла, используйте `uploaded_attachments`. Пример с корректным Base64 небольшого текстового файла:
 
 ```json
 {
-  "to": ["user@company.ru"],
-  "subject": "Report",
-  "body": "Report is attached.",
+  "to": ["user@example.com"],
+  "subject": "Вложение",
   "uploaded_attachments": [
     {
-      "filename": "report.xlsx",
-      "content_base64": "UEsDBBQAAAAI..."
+      "filename": "hello.txt",
+      "content_base64": "SGVsbG8K"
     }
   ]
 }
 ```
 
-The server validates the Base64 data, writes it to a temporary directory, attaches it to the Outlook draft, saves the draft and removes the temporary copy. Uploaded files are limited to 20 MB per attachment. Base64 data URLs are also accepted.
+Сервер проверяет Base64, создаёт временный файл, прикладывает его, сохраняет черновик и удаляет временную копию. Лимит декодированного файла — 20 МиБ на вложение. Поддерживаются Base64 data URL.
 
-Both `attachments` and `uploaded_attachments` may be used in the same request.
+`attachments` и `uploaded_attachments` можно сочетать. Все локальные пути относятся к компьютеру сервера; загрузка файла в чат сама по себе не делает файл доступным серверу.
 
-## Tables in the message body
+### Таблицы
 
-Structured tables may be supplied using the `tables` parameter. The server renders them as Outlook-compatible HTML.
+Аргументы `create_draft`:
 
 ```json
 {
-  "to": ["user@company.ru"],
-  "subject": "Meeting protocol",
-  "body": "Agreed actions:",
+  "to": ["user@example.com"],
+  "subject": "План работ",
+  "body": "Согласованные действия:",
   "tables": [
     {
-      "title": "Actions",
-      "columns": ["Task", "Owner", "Due date"],
-      "rows": [
-        ["Prepare report", "Ivanov", "12.09.2026"]
-      ]
+      "title": "Задачи",
+      "columns": ["Задача", "Ответственный", "Срок"],
+      "rows": [["Подготовить отчёт", "Иванов", "25.09.2026"]]
     }
   ]
 }
 ```
 
-## Outlook calendar tools
+Текст и таблицы преобразуются в HTML. Произвольный HTML в обычном `body` экранируется.
 
-The server also exposes Outlook calendar operations:
+## Markdown и персональные шаблоны
 
-- `list_calendar_events`
-- `create_calendar_event`
-- `update_calendar_event`
-- `delete_calendar_event`
+`create_draft_from_markdown` принимает ровно один источник:
 
-Calendar date/time arguments use local ISO format, for example:
+- `markdown` — текст в запросе;
+- `markdown_file` — путь к локальному файлу `.md` или `.markdown`;
+- `template_name` — имя шаблона из каталога [templates](templates).
 
-```text
-2026-09-10T15:30:00
-```
-
-### List events
+Поддерживаются заголовки H1–H3, абзацы, жирный и курсивный текст, HTTP(S)-ссылки, списки, горизонтальные линии и таблицы Markdown. Это ограниченный набор Markdown; исходный HTML экранируется.
 
 ```json
 {
-  "start": "2026-09-10T00:00:00",
-  "end": "2026-09-11T00:00:00"
+  "to": ["user@example.com"],
+  "subject": "Статус проекта {{project}}",
+  "markdown": "# {{project}}\n\n{{name}}, добрый день.\n\nСтатус: **готово**.",
+  "variables": {
+    "project": "Внедрение",
+    "name": "Анна"
+  }
 }
 ```
 
-### Create an event
+Переменные `{{name}}` подставляются в тему и текст. Отсутствие нужной переменной вызывает ошибку. Для одного получателя переменная `email` добавляется автоматически, если не задана явно.
+
+В репозитории есть [test_personalized_email.md](templates/test_personalized_email.md) с переменными `project`, `first_name`, `status` и `deadline`.
+
+### Персонализация по строкам CSV/XLSX
+
+Пример CSV в UTF-8:
+
+```csv
+email,first_name,project,status,deadline
+anna@example.com,Анна,Внедрение,В работе,25.09.2026
+ivan@example.com,Иван,Миграция,На согласовании,28.09.2026
+```
+
+Вызов `create_bulk_drafts_from_template`:
 
 ```json
 {
-  "subject": "Project sync",
-  "start": "2026-09-10T15:30:00",
-  "end": "2026-09-10T16:00:00",
-  "location": "Teams",
-  "body": "Discuss project status",
-  "attendees": ["user1@company.ru", "user2@company.ru"],
+  "recipient_file": "C:\\Work\\mail\\projects.csv",
+  "template_name": "test_personalized_email",
+  "subject": "Статус проекта {{project}}"
+}
+```
+
+Каждый столбец доступен шаблону как переменная. Служебные столбцы:
+
+| Столбец | Назначение |
+| --- | --- |
+| `email` | Получатель; другое имя задаётся через `email_column` |
+| `subject` или `Тема` | Тема строки с приоритетом над общим аргументом `subject` |
+| `cc`, `bcc` | Дополнительные адресаты через запятую или точку с запятой |
+| `from_email` | Отправитель строки с приоритетом над общим аргументом |
+
+Для XLSX лист выбирается аргументом `sheet`, а не `recipient_file_sheet`. Параметр `subject_column` задаёт другое имя столбца темы. Вложения, переданные инструменту, общие для всех строк.
+
+## Календарь
+
+Передавайте местное время в ISO-формате без `Z` и смещения: `2026-09-21T15:30:00`. Конец интервала должен быть позже начала. Для OWA используется московское время.
+
+### Чтение событий
+
+`list_calendar_events`:
+
+```json
+{
+  "start": "2026-09-21T00:00:00",
+  "end": "2026-09-22T00:00:00",
+  "limit": 100
+}
+```
+
+Для дополнительного/общего хранилища добавьте `store_name` — его отображаемое имя в Outlook. Допускается точное или однозначное частичное совпадение. Проверить доступ можно через `diagnose_mailbox_calendar` с тем же именем.
+
+`limit` — от 1 до 500, по умолчанию 100. Ответ содержит события с `entry_id`, временем, темой, местом, текстом и участниками, а также счётчики просмотра.
+
+### Подготовка встречи для ручной отправки
+
+`prepare_calendar_meeting`:
+
+```json
+{
+  "subject": "Обсуждение проекта",
+  "start": "2026-09-21T15:30:00",
+  "end": "2026-09-21T16:00:00",
+  "attendees": ["user1@example.com", "user2@example.com"],
+  "location": "Переговорная 301",
+  "body": "Обсудить текущий статус.",
   "reminder_minutes": 15
 }
 ```
 
-The event is saved in the local Outlook calendar. If attendees are provided, the item is prepared as a meeting, but the MCP server deliberately does **not** call `Send()`, so invitations are not sent automatically.
+Нужен хотя бы один участник. Инструмент открывает окно встречи без программного сохранения и отправки. При блокировке `Recipients.Add` пробует `RequiredAttendees`. Проверьте участников в Outlook и отправьте приглашение вручную.
 
-### Update an event
+### Создание события
 
-Use the `entry_id` returned by `list_calendar_events` or `create_calendar_event`:
+Те же аргументы можно передать в `create_calendar_event`; `attendees` здесь необязателен. Поддерживаются `all_day` и `reminder_minutes` (по умолчанию 15; `null` отключает напоминание).
 
-```json
-{
-  "entry_id": "OUTLOOK_ENTRY_ID",
-  "location": "Room 301",
-  "start": "2026-09-10T16:00:00",
-  "end": "2026-09-10T16:30:00"
-}
-```
+Если Outlook блокирует сохранение встречи с участниками, сервер пытается открыть её окно. Проверяйте `status`, `event_saved`, `window_opened` и `manual_send_required`: открытое окно не означает сохранённое событие.
 
-The item is saved without automatically sending meeting updates.
+### Изменение и удаление
 
-### Delete an event
+`update_calendar_event`:
 
 ```json
 {
-  "entry_id": "OUTLOOK_ENTRY_ID"
+  "entry_id": "OUTLOOK_EVENT_ENTRY_ID",
+  "location": "Переговорная 302",
+  "start": "2026-09-21T16:00:00",
+  "end": "2026-09-21T16:30:00",
+  "disable_reminder": true
 }
 ```
 
-The item is deleted from the local calendar. The server does not automatically send a meeting cancellation.
+Можно также менять `subject`, `body`, `all_day` и `reminder_minutes`.
+
+`delete_calendar_event`:
+
+```json
+{
+  "entry_id": "OUTLOOK_EVENT_ENTRY_ID"
+}
+```
+
+Используйте ID нужного события. Сервер не отправляет участникам обновления и отмены: изменение календаря организатора не означает уведомление участников. Параметр `store_name` предусмотрен только для чтения; инструменты изменения и удаления не принимают `store_id`.
+
+## Занятость сотрудников
+
+### Через Outlook COM
+
+`get_employee_free_busy`:
+
+```json
+{
+  "email": "user@example.com",
+  "start": "2026-09-21T09:00:00",
+  "end": "2026-09-21T18:00:00",
+  "slot_minutes": 30
+}
+```
+
+Ответ содержит `slots`, `free_slots` и объединённые `intervals`. Размер слота — от 5 до 1440 минут; COM-вариант ограничивает запрос 1440 слотами. Корпоративные политики могут блокировать разрешение адреса или получение занятости.
+
+### Через прямой HTTP-запрос к OWA
+
+`get_owa_free_busy`:
+
+```json
+{
+  "emails": ["user1@example.com", "user2@example.com"],
+  "start": "2026-09-21T09:00:00",
+  "end": "2026-09-21T18:00:00",
+  "slot_minutes": 30
+}
+```
+
+Используется внутренний вызов OWA `GetUserAvailabilityInternal`. По умолчанию применяется Windows Integrated Authentication через SSPI.
+
+Если обе переменные `OUTLOOK_MCP_OWA_COOKIE` и `OUTLOOK_MCP_OWA_CANARY` заданы в окружении процесса сервера, используются данные браузерной сессии. Cookie и canary — секреты сессии: не сохраняйте их в репозитории и не включайте в диагностические сообщения.
+
+Проверка TLS использует системное хранилище доверенных сертификатов Windows через truststore. При привязке авторизации к браузеру прямой запрос может вернуть `authentication_required` или `authentication_redirect`.
+
+### Через авторизованный браузер
+
+1. Запустите Chromium-совместимый браузер с включённым CDP согласно настройкам корпоративной среды.
+2. Откройте `https://mail.sberbank.ru` и выполните вход.
+3. Проверьте подключение через `diagnose_browser_owa`.
+4. Вызовите `get_browser_owa_free_busy` с теми же аргументами, что у HTTP-варианта; при необходимости добавьте `cdp_url`.
+
+Приоритет адреса CDP: аргумент `cdp_url` → переменная `OUTLOOK_MCP_CDP_URL` → `http://127.0.0.1:9222`.
+
+Пример настройки перед запуском:
+
+```powershell
+$env:OUTLOOK_MCP_CDP_URL = "http://127.0.0.1:9222"
+.\.venv\Scripts\python.exe -m outlook_mcp.server
+```
+
+Переменная только указывает адрес: она не запускает браузер и не включает CDP. Playwright подключается к существующему браузеру. Сервер ищет вкладку OWA, получает canary и выполняет запрос внутри неё. Cookie и canary не возвращаются в обычном диагностическом результате.
+
+**Оба браузерных инструмента перезагружают выбранную вкладку OWA для получения canary.** Перед вызовом завершите работу с несохранёнными формами. Не предоставляйте посторонним доступ к порту CDP.
+
+Статусы занятости: `free`, `tentative`, `busy`, `out_of_office`, `working_elsewhere`; неизвестные коды отображаются как `unknown`. Пустой ответ не следует считать подтверждением свободного времени.
+
+## Диагностика и текущие ограничения
+
+Начните с `get_outlook_status` и `diagnose_outlook`, затем используйте диагностику нужного сценария. Для другого отправителя передавайте `diagnose_send_as_account` явный аргумент `email`, для общего календаря — `store_name`. В коде есть корпоративные значения по умолчанию, которые могут не соответствовать вашему профилю.
+
+- Просмотр календаря начинается с ранних записей и ограничен 10 000 элементов. При большой истории ответ может быть неполным даже со статусом `ok`. Проверяйте `scanned`, `skipped` и `comparison_errors`; отдельного признака усечения пока нет.
+- `delete_calendar_event` не проверяет тип найденного объекта. Ошибочный ID письма может привести к удалению письма.
+- В нескольких операциях смещение часового пояса отбрасывается без преобразования. Используйте время без смещения в ожидаемом местном поясе; OWA зафиксирован на московском времени.
+- Именованные шаблоны ищутся относительно дерева исходников. Их включение в устанавливаемый wheel пока не настроено.
+- Работа зависит от профиля Outlook, прав на ящики, корпоративных политик и развёртывания OWA. Наличие инструмента не гарантирует доступность операции.
+- В репозитории пока нет автоматического набора тестов и конфигурации CI.
+
+## Структура проекта
+
+| Файл или каталог | Назначение |
+| --- | --- |
+| [server.py](src/outlook_mcp/server.py) | MCP-инструменты и параметры запуска |
+| [models.py](src/outlook_mcp/models.py) | Модели запросов |
+| [outlook.py](src/outlook_mcp/outlook.py) | Черновики, получатели, таблицы и вложения |
+| [markdown_email.py](src/outlook_mcp/markdown_email.py) | Преобразование Markdown в HTML |
+| [markdown_draft.py](src/outlook_mcp/markdown_draft.py) | Шаблоны и Markdown-черновики |
+| [bulk_template.py](src/outlook_mcp/bulk_template.py) | Персонализация по CSV/XLSX |
+| [calendar.py](src/outlook_mcp/calendar.py) | Основной календарь и встречи |
+| [mailbox_calendar.py](src/outlook_mcp/mailbox_calendar.py) | Чтение дополнительных календарей |
+| [freebusy.py](src/outlook_mcp/freebusy.py) | Занятость через COM |
+| [owa_freebusy.py](src/outlook_mcp/owa_freebusy.py) | Занятость через HTTP |
+| [browser_owa_freebusy.py](src/outlook_mcp/browser_owa_freebusy.py) | Занятость через браузер и CDP |
+| [templates](templates) | Именованные Markdown-шаблоны |
+
+Диагностические функции также вынесены в `diagnostics.py`, `mailbox_calendar_diagnostics.py` и `send_as_diagnostics.py`.
